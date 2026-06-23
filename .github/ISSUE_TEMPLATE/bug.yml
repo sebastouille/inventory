@@ -1,0 +1,34 @@
+name: Signalement de bug
+description: Creer une demande de correction structuree liee au workflow documentaire du projet.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Resume
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Etapes de reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Resultat attendu
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Resultat observe
+    validations:
+      required: true
+  - type: input
+    id: references
+    attributes:
+      label: References
+      description: Lier un dossier d'etape, un ADR, une capture, ou la zone en echec

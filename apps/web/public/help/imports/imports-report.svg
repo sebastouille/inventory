@@ -1,0 +1,38 @@
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="720" rx="32" fill="#F8FAFC"/>
+  <text x="72" y="88" fill="#0F172A" font-family="Arial, sans-serif" font-size="34" font-weight="700">Rapport de preview, validate et execute</text>
+  <text x="72" y="122" fill="#475569" font-family="Arial, sans-serif" font-size="18">Le rapport sert a voir la decision ligne par ligne avant et apres execution.</text>
+
+  <rect x="72" y="180" width="1056" height="108" rx="24" fill="#E2E8F0" stroke="#94A3B8"/>
+  <text x="104" y="226" fill="#334155" font-family="Arial, sans-serif" font-size="22" font-weight="700">Resume</text>
+  <text x="104" y="258" fill="#475569" font-family="Arial, sans-serif" font-size="18">rowsRead, rowsValid, rowsRejected, rowsWithWarnings, simulatedWrites, appliedWrites</text>
+
+  <rect x="72" y="336" width="1056" height="292" rx="24" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="104" y="380" fill="#0F172A" font-family="Arial, sans-serif" font-size="22" font-weight="700">Lignes du rapport</text>
+
+  <rect x="104" y="410" width="992" height="48" rx="12" fill="#F8FAFC" stroke="#E2E8F0"/>
+  <text x="132" y="440" fill="#334155" font-family="Arial, sans-serif" font-size="16" font-weight="700">Ligne</text>
+  <text x="264" y="440" fill="#334155" font-family="Arial, sans-serif" font-size="16" font-weight="700">Statut</text>
+  <text x="436" y="440" fill="#334155" font-family="Arial, sans-serif" font-size="16" font-weight="700">Cle resolue</text>
+  <text x="726" y="440" fill="#334155" font-family="Arial, sans-serif" font-size="16" font-weight="700">Messages</text>
+
+  <rect x="104" y="478" width="992" height="44" rx="12" fill="#ECFDF5"/>
+  <text x="132" y="506" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">12</text>
+  <text x="264" y="506" fill="#166534" font-family="Arial, sans-serif" font-size="16" font-weight="700">CREATED</text>
+  <text x="436" y="506" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">SITE/HQ/ETAGE1</text>
+  <text x="726" y="506" fill="#166534" font-family="Arial, sans-serif" font-size="16">OPERATION_CREATE</text>
+
+  <rect x="104" y="534" width="992" height="44" rx="12" fill="#EFF6FF"/>
+  <text x="132" y="562" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">13</text>
+  <text x="264" y="562" fill="#1D4ED8" font-family="Arial, sans-serif" font-size="16" font-weight="700">UPDATED</text>
+  <text x="436" y="562" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">SITE/HQ/ETAGE2</text>
+  <text x="726" y="562" fill="#1D4ED8" font-family="Arial, sans-serif" font-size="16">OPERATION_UPDATE</text>
+
+  <rect x="104" y="590" width="992" height="44" rx="12" fill="#FEF2F2"/>
+  <text x="132" y="618" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">14</text>
+  <text x="264" y="618" fill="#B91C1C" font-family="Arial, sans-serif" font-size="16" font-weight="700">REJECTED</text>
+  <text x="436" y="618" fill="#1E293B" font-family="Arial, sans-serif" font-size="16">SITE/HQ/ROOM-X</text>
+  <text x="726" y="618" fill="#B91C1C" font-family="Arial, sans-serif" font-size="16">PARENT_NOT_FOUND</text>
+
+  <text x="72" y="676" fill="#475569" font-family="Arial, sans-serif" font-size="18">Le rapport reste relisible depuis l historique des jobs, meme apres fermeture de la page.</text>
+</svg>

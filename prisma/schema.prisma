@@ -1,0 +1,1276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum IamAccessScopeType {
+  SITE
+  BUILDING
+  FLOOR
+  ZONE
+  ROOM
+  LOCATION
+}
+
+enum AssetAssignmentType {
+  PERSON
+  LOCATION
+  ASSET
+}
+
+enum EquipmentMovementType {
+  INITIAL_STATE
+  LOCATION_CHANGED
+  ASSIGNMENT_ADDED
+  ASSIGNMENT_REMOVED
+  ASSIGNMENT_CHANGED
+}
+
+enum EquipmentMovementTriggerType {
+  EQUIPMENT_CREATED
+  EQUIPMENT_UPDATED
+  ASSIGNMENTS_REPLACED
+  IMPORT_EXECUTED
+  SYSTEM_BACKFILL
+}
+
+enum EquipmentMovementSource {
+  USER
+  IMPORT
+  SYSTEM
+}
+
+enum ImportTargetDomain {
+  SPATIAL_NODES
+  EQUIPMENTS
+  IMMOBILIZATIONS
+}
+
+enum ImportSourceKind {
+  CSV
+  XLSX
+}
+
+enum SpatialSourceKind {
+  LEGACY
+  CSV
+  XLSX
+  IFC4
+}
+
+enum ImportJobStatus {
+  DRAFT
+  UPLOADED
+  MAPPED
+  VALIDATED
+  READY
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ImportJobWriteOperation {
+  CREATED
+  UPDATED
+}
+
+enum SpatialNodeType {
+  SITE
+  BUILDING
+  FLOOR
+  ZONE
+  ROOM
+  LOCATION
+}
+
+enum InventoryCampaignStatus {
+  DRAFT
+  READY
+  OPEN
+  REVIEW
+  CLOSED
+  ARCHIVED
+}
+
+enum InventoryObservationResult {
+  MATCH
+  WRONG_LOCATION
+  UNKNOWN_CODE
+  DUPLICATE
+  OUT_OF_SCOPE
+}
+
+enum InventoryScanSource {
+  CAMERA
+  HID
+  MANUAL
+}
+
+enum InventoryAnomalyType {
+  WRONG_LOCATION
+  UNKNOWN_CODE
+  MISSING
+  DUPLICATE
+  OUT_OF_SCOPE
+}
+
+enum InventoryAnomalyStatus {
+  OPEN
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum InventoryCorrectionType {
+  LOCATION_CHANGE
+  STATUS_CHANGE
+  RELABEL_REQUEST
+  MANUAL_IMMOBILIZATION_LINK
+}
+
+enum InventoryCorrectionStatus {
+  PROPOSED
+  APPROVED
+  REJECTED
+  APPLIED
+  FAILED
+}
+
+enum InventoryAttachmentKind {
+  PHOTO
+  DOCUMENT
+}
+
+enum Bim3dMapStatus {
+  BUILDING
+  READY
+  FAILED
+  ARCHIVED
+}
+
+model Organization {
+  id                String           @id @default(uuid()) @db.Uuid
+  name              String
+  slug              String           @unique
+  settings          Json?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  users             User[]
+  locations         Location[]
+  suppliers         Supplier[]
+  productCategories ProductCategory[]
+  products          Product[]
+  stockMovements    StockMovement[]
+  purchaseOrders    PurchaseOrder[]
+  auditLogs         AuditLog[]
+  accessScopes      IamAccessScope[]
+  importProfiles    ImportProfile[]
+  importJobs        ImportJob[]
+  importJobWrites   ImportJobWrite[]
+  spatialNodes      SpatialNode[]
+  equipmentCategories      EquipmentCategory[]
+  equipmentFamilies        EquipmentFamily[]
+  equipmentSubfamilies     EquipmentSubfamily[]
+  equipmentTypes           EquipmentType[]
+  equipmentBrands          EquipmentBrand[]
+  equipmentModels          EquipmentModel[]
+  equipmentStatuses        EquipmentStatus[]
+  ownerEntities            OwnerEntity[]
+  immobilizations          Immobilization[]
+  equipments               Equipment[]
+  equipmentAssignments     EquipmentAssignment[]
+  equipmentMovements       EquipmentMovement[]
+  equipmentAttachmentRules EquipmentFamilyAttachmentRule[]
+  inventoryCampaigns       InventoryCampaign[]
+  inventoryCampaignScopes  InventoryCampaignScope[]
+  inventoryCampaignFamilyFilters InventoryCampaignFamilyFilter[]
+  inventoryCampaignExpectedItems InventoryCampaignExpectedItem[]
+  inventoryObservations    InventoryObservation[]
+  inventoryAnomalies       InventoryAnomaly[]
+  inventoryCorrections     InventoryCorrection[]
+  inventorySyncBatches     InventorySyncBatch[]
+  inventoryAttachments     InventoryAttachment[]
+  bim3dMaps                Bim3dMap[]
+  bim3dMapBuilds           Bim3dMapBuild[]
+}
+
+model User {
+  id                String        @id @default(uuid()) @db.Uuid
+  organizationId    String        @db.Uuid
+  email             String
+  passwordHash      String
+  mustChangePassword Boolean      @default(false)
+  name              String?
+  isActive          Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  auditLogs         AuditLog[]
+  roleAssignments   IamUserRole[] @relation("IamUserRolesUser")
+  assignedUserRoles IamUserRole[] @relation("IamUserRolesAssignedBy")
+  createdImportProfiles ImportProfile[] @relation("ImportProfilesCreatedBy")
+  createdImportJobs     ImportJob[] @relation("ImportJobsCreatedBy")
+  equipmentAssignments EquipmentAssignment[] @relation("EquipmentAssignmentsTargetUser")
+  createdEquipmentMovements EquipmentMovement[] @relation("EquipmentMovementsCreatedBy")
+  createdInventoryCampaigns InventoryCampaign[] @relation("InventoryCampaignsCreatedBy")
+  responsibleInventoryCampaigns InventoryCampaign[] @relation("InventoryCampaignsResponsibleUser")
+  inventoryObservations InventoryObservation[] @relation("InventoryObservationsCreatedBy")
+  proposedInventoryCorrections InventoryCorrection[] @relation("InventoryCorrectionsProposedBy")
+  approvedInventoryCorrections InventoryCorrection[] @relation("InventoryCorrectionsApprovedBy")
+  inventorySyncBatches InventorySyncBatch[] @relation("InventorySyncBatchesUser")
+  inventoryAttachments InventoryAttachment[] @relation("InventoryAttachmentsUploadedBy")
+  createdBim3dMaps     Bim3dMap[] @relation("Bim3dMapsCreatedBy")
+  createdBim3dMapBuilds Bim3dMapBuild[] @relation("Bim3dMapBuildsCreatedBy")
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+model Location {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  code           String
+  name           String
+  description    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  stockItems     StockItem[]
+  equipmentAssignments EquipmentAssignment[] @relation("EquipmentAssignmentsTargetLocation")
+  spatialNodes   SpatialNode[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model Supplier {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  name           String
+  email          String?
+  phone          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products       Product[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model ProductCategory {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  code           String
+  name           String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products       Product[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model Product {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  categoryId     String?          @db.Uuid
+  supplierId     String?          @db.Uuid
+  sku            String
+  name           String
+  barcode        String?
+  unit           String           @default("pcs")
+  minStock       Int              @default(0)
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  supplier       Supplier?        @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  stockItems     StockItem[]
+  movementLines  StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId])
+  @@index([organizationId, barcode])
+}
+
+model StockItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  productId  String   @db.Uuid
+  locationId String   @db.Uuid
+  quantity   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, locationId])
+}
+
+model StockMovement {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  productId      String            @db.Uuid
+  fromLocationId String?           @db.Uuid
+  toLocationId   String?           @db.Uuid
+  type           StockMovementType
+  quantity       Int
+  reason         String?
+  createdById    String?           @db.Uuid
+  createdAt      DateTime          @default(now())
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([organizationId, productId])
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  supplierId     String              @db.Uuid
+  reference      String?
+  status         PurchaseOrderStatus @default(DRAFT)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier       Supplier            @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  lines          PurchaseOrderLine[]
+
+  @@index([organizationId])
+}
+
+model PurchaseOrderLine {
+  id               String        @id @default(uuid()) @db.Uuid
+  purchaseOrderId  String        @db.Uuid
+  productId        String        @db.Uuid
+  quantityOrdered  Int
+  quantityReceived Int           @default(0)
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userId         String?      @db.Uuid
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+}
+
+model ImportProfile {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  targetDomain   ImportTargetDomain
+  name           String
+  sourceKind     ImportSourceKind
+  sheetName      String?
+  headerRowIndex Int                @default(1)
+  mappings       Json
+  options        Json?
+  isArchived     Boolean            @default(false)
+  createdById    String?            @db.Uuid
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy      User?              @relation("ImportProfilesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  jobs           ImportJob[]
+  spatialNodes   SpatialNode[]      @relation("ImportProfileSpatialNodes")
+
+  @@index([organizationId])
+  @@index([organizationId, targetDomain, isArchived])
+  @@index([createdById])
+}
+
+model ImportJob {
+  id              String             @id @default(uuid()) @db.Uuid
+  organizationId  String             @db.Uuid
+  profileId       String?            @db.Uuid
+  targetDomain    ImportTargetDomain
+  sourceKind      ImportSourceKind?
+  status          ImportJobStatus    @default(DRAFT)
+  originalFilename String?
+  storedFileRef   String?
+  storedMimeType  String?
+  sheetName       String?
+  sourceSnapshot  Json?
+  mappings        Json?
+  options         Json?
+  summary         Json?
+  report          Json?
+  createdById     String?            @db.Uuid
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  profile         ImportProfile?     @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  createdBy       User?              @relation("ImportJobsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  writes          ImportJobWrite[]
+  spatialNodes    SpatialNode[]      @relation("ImportJobSpatialNodes")
+  initializedEquipments Equipment[]  @relation("ImportJobInitializedEquipments")
+  initializedImmobilizations Immobilization[] @relation("ImportJobInitializedImmobilizations")
+  bim3dMaps       Bim3dMap[]         @relation("ImportJobBim3dMaps")
+  bim3dMapBuilds  Bim3dMapBuild[]    @relation("ImportJobBim3dMapBuilds")
+
+  @@index([organizationId])
+  @@index([organizationId, targetDomain, status])
+  @@index([profileId])
+  @@index([createdById])
+}
+
+model Bim3dMap {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  importJobId    String?         @db.Uuid
+  name           String
+  status         Bim3dMapStatus  @default(BUILDING)
+  mode           String          @default("simplified")
+  sceneFileRef   String?
+  summary        Json?
+  errorMessage   String?
+  createdById    String?         @db.Uuid
+  archivedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  importJob      ImportJob?      @relation("ImportJobBim3dMaps", fields: [importJobId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("Bim3dMapsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  builds         Bim3dMapBuild[]
+
+  @@index([organizationId, status])
+  @@index([importJobId])
+  @@index([createdById])
+  @@map("bim_3d_maps")
+}
+
+model Bim3dMapBuild {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  mapId          String          @db.Uuid
+  importJobId    String?         @db.Uuid
+  status         Bim3dMapStatus  @default(BUILDING)
+  mode           String          @default("simplified")
+  sceneFileRef   String?
+  startedAt      DateTime        @default(now())
+  completedAt    DateTime?
+  durationMs     Int?
+  errorMessage   String?
+  summary        Json?
+  createdById    String?         @db.Uuid
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  map            Bim3dMap        @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  importJob      ImportJob?      @relation("ImportJobBim3dMapBuilds", fields: [importJobId], references: [id], onDelete: SetNull)
+  createdBy      User?           @relation("Bim3dMapBuildsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([mapId])
+  @@index([importJobId])
+  @@index([createdById])
+  @@map("bim_3d_map_builds")
+}
+
+model ImportJobWrite {
+  id               String                  @id @default(uuid()) @db.Uuid
+  organizationId   String                  @db.Uuid
+  jobId            String                  @db.Uuid
+  targetDomain     ImportTargetDomain
+  targetEntityType String
+  targetEntityId   String                  @db.Uuid
+  operation        ImportJobWriteOperation
+  targetPath       String?
+  payload          Json?
+  createdAt        DateTime                @default(now())
+
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  job              ImportJob               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, jobId])
+  @@index([jobId, operation])
+  @@index([organizationId, targetDomain, operation])
+  @@index([targetEntityId])
+  @@map("import_job_writes")
+}
+
+model SpatialNode {
+  id               String            @id @default(uuid()) @db.Uuid
+  organizationId   String            @db.Uuid
+  type             SpatialNodeType
+  code             String
+  label            String
+  description      String?
+  path             String
+  depth            Int
+  sortOrder        Int               @default(0)
+  parentId         String?           @db.Uuid
+  legacyLocationId String?           @db.Uuid
+  externalSource   SpatialSourceKind?
+  externalRef      String?
+  sourceClass      String?
+  sourceMetadata   Json?
+  geometrySource   String?
+  geometryMetadata Json?
+  worldCenterX     Float?
+  worldCenterY     Float?
+  worldCenterZ     Float?
+  worldSizeX       Float?
+  worldSizeY       Float?
+  worldSizeZ       Float?
+  geometryUpdatedAt DateTime?
+  importProfileId  String?           @db.Uuid
+  lastImportJobId  String?           @db.Uuid
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent           SpatialNode?      @relation("SpatialNodeTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         SpatialNode[]     @relation("SpatialNodeTree")
+  legacyLocation   Location?         @relation(fields: [legacyLocationId], references: [id], onDelete: SetNull)
+  iamScope         IamAccessScope?
+  currentEquipments Equipment[]      @relation("EquipmentCurrentSpatialNode")
+  equipmentMovementsFrom EquipmentMovement[] @relation("EquipmentMovementFromSpatialNode")
+  equipmentMovementsTo   EquipmentMovement[] @relation("EquipmentMovementToSpatialNode")
+  inventoryCampaignScopes InventoryCampaignScope[]
+  inventoryCampaignExpectedItems InventoryCampaignExpectedItem[] @relation("InventoryExpectedSpatialNode")
+  inventoryObservations InventoryObservation[] @relation("InventoryObservedSpatialNode")
+  inventoryAnomaliesExpected InventoryAnomaly[] @relation("InventoryAnomalyExpectedSpatialNode")
+  inventoryAnomaliesObserved InventoryAnomaly[] @relation("InventoryAnomalyObservedSpatialNode")
+  inventoryCorrectionTargets InventoryCorrection[] @relation("InventoryCorrectionTargetSpatialNode")
+  importProfile    ImportProfile?    @relation("ImportProfileSpatialNodes", fields: [importProfileId], references: [id], onDelete: SetNull)
+  lastImportJob    ImportJob?        @relation("ImportJobSpatialNodes", fields: [lastImportJobId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, parentId, code])
+  @@unique([organizationId, path])
+  @@unique([legacyLocationId])
+  @@index([organizationId, type])
+  @@index([organizationId, parentId])
+  @@index([organizationId, code])
+  @@index([organizationId, externalRef])
+  @@index([organizationId, sourceClass])
+  @@index([organizationId, geometrySource])
+  @@map("spatial_nodes")
+}
+
+model EquipmentCategory {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  families       EquipmentFamily[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@map("equipment_categories")
+}
+
+model EquipmentFamily {
+  id             String                          @id @default(uuid()) @db.Uuid
+  organizationId String                          @db.Uuid
+  categoryId     String                          @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean                         @default(true)
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @updatedAt
+  organization   Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       EquipmentCategory               @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  subfamilies    EquipmentSubfamily[]
+  sourceAttachmentRules EquipmentFamilyAttachmentRule[] @relation("EquipmentAttachmentRuleSourceFamily")
+  targetAttachmentRules EquipmentFamilyAttachmentRule[] @relation("EquipmentAttachmentRuleTargetFamily")
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([categoryId])
+  @@index([organizationId, isActive])
+  @@map("equipment_families")
+}
+
+model EquipmentSubfamily {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  familyId       String          @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  family         EquipmentFamily @relation(fields: [familyId], references: [id], onDelete: Restrict)
+  types          EquipmentType[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([familyId])
+  @@index([organizationId, isActive])
+  @@map("equipment_subfamilies")
+}
+
+model EquipmentType {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  subfamilyId    String             @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subfamily      EquipmentSubfamily @relation(fields: [subfamilyId], references: [id], onDelete: Restrict)
+  equipments     Equipment[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([subfamilyId])
+  @@index([organizationId, isActive])
+  @@map("equipment_types")
+}
+
+model EquipmentBrand {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  models         EquipmentModel[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@map("equipment_brands")
+}
+
+model EquipmentModel {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  brandId        String          @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isGeneric      Boolean         @default(false)
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  brand          EquipmentBrand  @relation(fields: [brandId], references: [id], onDelete: Restrict)
+  equipments     Equipment[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([brandId])
+  @@index([organizationId, isActive])
+  @@map("equipment_models")
+}
+
+model EquipmentStatus {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  equipments     Equipment[]
+  inventoryCorrectionTargets InventoryCorrection[] @relation("InventoryCorrectionTargetStatus")
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@map("equipment_statuses")
+}
+
+model OwnerEntity {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  code           String
+  label          String
+  description    String?
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  equipments     Equipment[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([organizationId, isActive])
+  @@map("owner_entities")
+}
+
+model Immobilization {
+  id                       String       @id @default(uuid()) @db.Uuid
+  organizationId           String       @db.Uuid
+  code                     String
+  label                    String
+  description              String?
+  status                   String?
+  costCenter               String?
+  purchaseValue            Decimal?     @db.Decimal(14, 2)
+  purchaseDate             DateTime?
+  serviceStartAt           DateTime?
+  sourceSystem             String?
+  externalRef              String?
+  initializedByImportJobId String?      @db.Uuid
+  isActive                 Boolean      @default(true)
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  initializedByImportJob   ImportJob?   @relation("ImportJobInitializedImmobilizations", fields: [initializedByImportJobId], references: [id], onDelete: SetNull)
+  equipments               Equipment[]
+  inventoryCorrectionTargets InventoryCorrection[] @relation("InventoryCorrectionTargetImmobilization")
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@index([organizationId, status])
+  @@index([organizationId, externalRef])
+  @@index([initializedByImportJobId])
+  @@map("immobilizations")
+}
+
+model Equipment {
+  id                       String                @id @default(uuid()) @db.Uuid
+  organizationId           String                @db.Uuid
+  equipmentTypeId          String                @db.Uuid
+  equipmentModelId         String?               @db.Uuid
+  equipmentStatusId        String                @db.Uuid
+  ownerEntityId            String                @db.Uuid
+  currentSpatialNodeId     String?               @db.Uuid
+  immobilizationId         String?               @db.Uuid
+  initializedByImportJobId String?               @db.Uuid
+  internalCode             String
+  numPiece                 String?
+  externalRef              String?
+  serialNumber             String?
+  technicalCharacteristics String?
+  geometrySource           String?
+  geometryMetadata         Json?
+  worldCenterX             Float?
+  worldCenterY             Float?
+  worldCenterZ             Float?
+  worldSizeX               Float?
+  worldSizeY               Float?
+  worldSizeZ               Float?
+  geometryUpdatedAt        DateTime?
+  notes                    String?
+  receivedAt               DateTime?
+  commissionedAt           DateTime?
+  lastInventoryAt          DateTime?
+  isDeleted                Boolean               @default(false)
+  deletedAt                DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  organization             Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  equipmentType            EquipmentType         @relation(fields: [equipmentTypeId], references: [id], onDelete: Restrict)
+  equipmentModel           EquipmentModel?       @relation(fields: [equipmentModelId], references: [id], onDelete: SetNull)
+  equipmentStatus          EquipmentStatus       @relation(fields: [equipmentStatusId], references: [id], onDelete: Restrict)
+  ownerEntity              OwnerEntity           @relation(fields: [ownerEntityId], references: [id], onDelete: Restrict)
+  currentSpatialNode       SpatialNode?          @relation("EquipmentCurrentSpatialNode", fields: [currentSpatialNodeId], references: [id], onDelete: SetNull)
+  immobilization           Immobilization?       @relation(fields: [immobilizationId], references: [id], onDelete: SetNull)
+  initializedByImportJob   ImportJob?            @relation("ImportJobInitializedEquipments", fields: [initializedByImportJobId], references: [id], onDelete: SetNull)
+  assignments              EquipmentAssignment[] @relation("EquipmentAssignmentsSourceAsset")
+  parentAssignments        EquipmentAssignment[] @relation("EquipmentAssignmentsTargetAsset")
+  movements                EquipmentMovement[]
+  campaignExpectedItems    InventoryCampaignExpectedItem[]
+  inventoryObservations    InventoryObservation[]
+  inventoryAnomalies       InventoryAnomaly[]
+  inventoryCorrections     InventoryCorrection[]
+
+  @@unique([organizationId, internalCode])
+  @@unique([organizationId, serialNumber])
+  @@index([organizationId])
+  @@index([organizationId, externalRef])
+  @@index([equipmentStatusId])
+  @@index([ownerEntityId])
+  @@index([equipmentTypeId])
+  @@index([organizationId, currentSpatialNodeId])
+  @@index([organizationId, immobilizationId])
+  @@index([organizationId, geometrySource])
+  @@index([initializedByImportJobId])
+  @@index([organizationId, isDeleted])
+  @@map("equipment_assets")
+}
+
+model EquipmentAssignment {
+  id               String              @id @default(uuid()) @db.Uuid
+  organizationId   String              @db.Uuid
+  equipmentId      String              @db.Uuid
+  assignmentType   AssetAssignmentType
+  targetUserId     String?             @db.Uuid
+  targetPersonName String?
+  targetLocationId String?             @db.Uuid
+  targetEquipmentId String?            @db.Uuid
+  startsAt         DateTime            @default(now())
+  endsAt           DateTime?
+  notes            String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  equipment        Equipment           @relation("EquipmentAssignmentsSourceAsset", fields: [equipmentId], references: [id], onDelete: Cascade)
+  targetUser       User?               @relation("EquipmentAssignmentsTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetLocation   Location?           @relation("EquipmentAssignmentsTargetLocation", fields: [targetLocationId], references: [id], onDelete: SetNull)
+  targetEquipment  Equipment?          @relation("EquipmentAssignmentsTargetAsset", fields: [targetEquipmentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([equipmentId])
+  @@index([targetUserId])
+  @@index([targetLocationId])
+  @@index([targetEquipmentId])
+  @@map("equipment_assignments")
+}
+
+model EquipmentMovement {
+  id                     String                       @id @default(uuid()) @db.Uuid
+  organizationId         String                       @db.Uuid
+  equipmentId            String                       @db.Uuid
+  movementType           EquipmentMovementType
+  triggerType            EquipmentMovementTriggerType
+  source                 EquipmentMovementSource
+  fromSpatialNodeId      String?                      @db.Uuid
+  toSpatialNodeId        String?                      @db.Uuid
+  fromSpatialSnapshot    Json?
+  toSpatialSnapshot      Json?
+  fromAssignmentSnapshot Json?
+  toAssignmentSnapshot   Json?
+  reason                 String?
+  createdById            String?                      @db.Uuid
+  createdAt              DateTime                     @default(now())
+
+  organization           Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  equipment              Equipment                    @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  fromSpatialNode        SpatialNode?                 @relation("EquipmentMovementFromSpatialNode", fields: [fromSpatialNodeId], references: [id], onDelete: SetNull)
+  toSpatialNode          SpatialNode?                 @relation("EquipmentMovementToSpatialNode", fields: [toSpatialNodeId], references: [id], onDelete: SetNull)
+  createdBy              User?                        @relation("EquipmentMovementsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([equipmentId])
+  @@index([organizationId, equipmentId, createdAt])
+  @@index([organizationId, movementType])
+  @@index([organizationId, source])
+  @@index([fromSpatialNodeId])
+  @@index([toSpatialNodeId])
+  @@index([createdById])
+  @@map("equipment_movements")
+}
+
+model EquipmentFamilyAttachmentRule {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  sourceFamilyId String          @db.Uuid
+  targetFamilyId String          @db.Uuid
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceFamily   EquipmentFamily @relation("EquipmentAttachmentRuleSourceFamily", fields: [sourceFamilyId], references: [id], onDelete: Cascade)
+  targetFamily   EquipmentFamily @relation("EquipmentAttachmentRuleTargetFamily", fields: [targetFamilyId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sourceFamilyId, targetFamilyId])
+  @@index([organizationId])
+  @@index([sourceFamilyId])
+  @@index([targetFamilyId])
+  @@map("equipment_family_attachment_rules")
+}
+
+model InventoryCampaign {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  organizationId     String                  @db.Uuid
+  name               String
+  description        String?
+  status             InventoryCampaignStatus @default(DRAFT)
+  plannedStartAt     DateTime?
+  plannedEndAt       DateTime?
+  openedAt           DateTime?
+  reviewStartedAt    DateTime?
+  closedAt           DateTime?
+  archivedAt         DateTime?
+  createdById        String?                 @db.Uuid
+  responsibleUserId  String?                 @db.Uuid
+  expectedItemsCount Int                     @default(0)
+  observationsCount  Int                     @default(0)
+  anomaliesCount     Int                     @default(0)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  organization       Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy          User?                   @relation("InventoryCampaignsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  responsibleUser    User?                   @relation("InventoryCampaignsResponsibleUser", fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  scopes             InventoryCampaignScope[]
+  familyFilters      InventoryCampaignFamilyFilter[]
+  expectedItems      InventoryCampaignExpectedItem[]
+  observations       InventoryObservation[]
+  anomalies          InventoryAnomaly[]
+  corrections        InventoryCorrection[]
+  syncBatches        InventorySyncBatch[]
+  attachments        InventoryAttachment[]
+
+  @@index([organizationId, status])
+  @@index([createdById])
+  @@index([responsibleUserId])
+  @@map("inventory_campaigns")
+}
+
+model InventoryCampaignScope {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  campaignId     String            @db.Uuid
+  spatialNodeId  String            @db.Uuid
+  includeChildren Boolean          @default(true)
+  snapshot       Json?
+  createdAt      DateTime          @default(now())
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       InventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  spatialNode    SpatialNode       @relation(fields: [spatialNodeId], references: [id], onDelete: Restrict)
+
+  @@unique([campaignId, spatialNodeId])
+  @@index([organizationId, campaignId])
+  @@index([spatialNodeId])
+  @@map("inventory_campaign_scopes")
+}
+
+model InventoryCampaignFamilyFilter {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  campaignId     String            @db.Uuid
+  categoryId     String?           @db.Uuid
+  familyId       String?           @db.Uuid
+  subfamilyId    String?           @db.Uuid
+  typeId         String?           @db.Uuid
+  createdAt      DateTime          @default(now())
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       InventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, campaignId])
+  @@index([categoryId])
+  @@index([familyId])
+  @@index([subfamilyId])
+  @@index([typeId])
+  @@map("inventory_campaign_family_filters")
+}
+
+model InventoryCampaignExpectedItem {
+  id                  String            @id @default(uuid()) @db.Uuid
+  organizationId      String            @db.Uuid
+  campaignId          String            @db.Uuid
+  equipmentId         String            @db.Uuid
+  expectedSpatialNodeId String?         @db.Uuid
+  expectedSpatialPath String?
+  equipmentSnapshot   Json
+  isSeen              Boolean           @default(false)
+  seenAt              DateTime?
+  createdAt           DateTime          @default(now())
+
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign            InventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  equipment           Equipment         @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  expectedSpatialNode SpatialNode?      @relation("InventoryExpectedSpatialNode", fields: [expectedSpatialNodeId], references: [id], onDelete: SetNull)
+  observations        InventoryObservation[]
+  anomalies           InventoryAnomaly[]
+
+  @@unique([campaignId, equipmentId])
+  @@index([organizationId, campaignId])
+  @@index([equipmentId])
+  @@index([expectedSpatialNodeId])
+  @@map("inventory_campaign_expected_items")
+}
+
+model InventoryObservation {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  organizationId       String                    @db.Uuid
+  campaignId           String                    @db.Uuid
+  expectedItemId       String?                   @db.Uuid
+  equipmentId          String?                   @db.Uuid
+  observedSpatialNodeId String?                  @db.Uuid
+  syncBatchId          String?                   @db.Uuid
+  clientObservationId  String
+  scannedPayload       String
+  scannedCode          String?
+  scanSource           InventoryScanSource?
+  deviceHint           String?
+  result               InventoryObservationResult
+  comment              String?
+  photoRequired        Boolean                   @default(false)
+  isSynced             Boolean                   @default(true)
+  clientObservedAt     DateTime?
+  observedAt           DateTime                  @default(now())
+  createdById          String?                   @db.Uuid
+  createdAt            DateTime                  @default(now())
+
+  organization         Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign             InventoryCampaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  expectedItem         InventoryCampaignExpectedItem? @relation(fields: [expectedItemId], references: [id], onDelete: SetNull)
+  equipment            Equipment?                @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  observedSpatialNode  SpatialNode?              @relation("InventoryObservedSpatialNode", fields: [observedSpatialNodeId], references: [id], onDelete: SetNull)
+  syncBatch            InventorySyncBatch?       @relation(fields: [syncBatchId], references: [id], onDelete: SetNull)
+  createdBy            User?                     @relation("InventoryObservationsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  anomalies            InventoryAnomaly[]
+  attachments          InventoryAttachment[]
+
+  @@unique([campaignId, clientObservationId])
+  @@index([organizationId, campaignId])
+  @@index([equipmentId])
+  @@index([observedSpatialNodeId])
+  @@index([result])
+  @@index([scanSource])
+  @@index([createdById])
+  @@map("inventory_observations")
+}
+
+model InventoryAnomaly {
+  id                    String                  @id @default(uuid()) @db.Uuid
+  organizationId        String                  @db.Uuid
+  campaignId            String                  @db.Uuid
+  observationId         String?                 @db.Uuid
+  expectedItemId        String?                 @db.Uuid
+  equipmentId           String?                 @db.Uuid
+  type                  InventoryAnomalyType
+  status                InventoryAnomalyStatus  @default(OPEN)
+  scannedCode           String?
+  expectedSpatialNodeId String?                 @db.Uuid
+  observedSpatialNodeId String?                 @db.Uuid
+  expectedSnapshot      Json?
+  observedSnapshot      Json?
+  notes                 String?
+  createdById           String?                 @db.Uuid
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  organization          Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign              InventoryCampaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  observation           InventoryObservation?   @relation(fields: [observationId], references: [id], onDelete: SetNull)
+  expectedItem          InventoryCampaignExpectedItem? @relation(fields: [expectedItemId], references: [id], onDelete: SetNull)
+  equipment             Equipment?              @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  expectedSpatialNode   SpatialNode?            @relation("InventoryAnomalyExpectedSpatialNode", fields: [expectedSpatialNodeId], references: [id], onDelete: SetNull)
+  observedSpatialNode   SpatialNode?            @relation("InventoryAnomalyObservedSpatialNode", fields: [observedSpatialNodeId], references: [id], onDelete: SetNull)
+  corrections           InventoryCorrection[]
+  attachments           InventoryAttachment[]
+
+  @@index([organizationId, campaignId])
+  @@index([type, status])
+  @@index([equipmentId])
+  @@index([observationId])
+  @@map("inventory_anomalies")
+}
+
+model InventoryCorrection {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  organizationId         String                    @db.Uuid
+  campaignId             String?                   @db.Uuid
+  anomalyId              String?                   @db.Uuid
+  equipmentId            String?                   @db.Uuid
+  correctionType         InventoryCorrectionType
+  status                 InventoryCorrectionStatus @default(PROPOSED)
+  fromSnapshot           Json?
+  toSnapshot             Json?
+  targetSpatialNodeId    String?                   @db.Uuid
+  targetEquipmentStatusId String?                  @db.Uuid
+  targetImmobilizationId String?                   @db.Uuid
+  notes                  String?
+  proposedById           String?                   @db.Uuid
+  approvedById           String?                   @db.Uuid
+  proposedAt             DateTime                  @default(now())
+  approvedAt             DateTime?
+  appliedAt              DateTime?
+  failureReason          String?
+
+  organization           Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign               InventoryCampaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  anomaly                InventoryAnomaly?         @relation(fields: [anomalyId], references: [id], onDelete: SetNull)
+  equipment              Equipment?                @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  targetSpatialNode      SpatialNode?              @relation("InventoryCorrectionTargetSpatialNode", fields: [targetSpatialNodeId], references: [id], onDelete: SetNull)
+  targetEquipmentStatus  EquipmentStatus?          @relation("InventoryCorrectionTargetStatus", fields: [targetEquipmentStatusId], references: [id], onDelete: SetNull)
+  targetImmobilization   Immobilization?           @relation("InventoryCorrectionTargetImmobilization", fields: [targetImmobilizationId], references: [id], onDelete: SetNull)
+  proposedBy             User?                     @relation("InventoryCorrectionsProposedBy", fields: [proposedById], references: [id], onDelete: SetNull)
+  approvedBy             User?                     @relation("InventoryCorrectionsApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  attachments            InventoryAttachment[]
+
+  @@index([organizationId, status])
+  @@index([campaignId])
+  @@index([anomalyId])
+  @@index([equipmentId])
+  @@map("inventory_corrections")
+}
+
+model InventorySyncBatch {
+  id                  String            @id @default(uuid()) @db.Uuid
+  organizationId      String            @db.Uuid
+  campaignId          String            @db.Uuid
+  userId              String?           @db.Uuid
+  activeSpatialNodeId String?           @db.Uuid
+  clientBatchId       String
+  status              String            @default("RECEIVED")
+  payload             Json?
+  result              Json?
+  createdAt           DateTime          @default(now())
+
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign            InventoryCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user                User?             @relation("InventorySyncBatchesUser", fields: [userId], references: [id], onDelete: SetNull)
+  observations        InventoryObservation[]
+
+  @@unique([campaignId, clientBatchId])
+  @@index([organizationId, campaignId])
+  @@index([userId])
+  @@map("inventory_sync_batches")
+}
+
+model InventoryAttachment {
+  id             String                  @id @default(uuid()) @db.Uuid
+  organizationId String                  @db.Uuid
+  campaignId     String?                 @db.Uuid
+  anomalyId      String?                 @db.Uuid
+  observationId  String?                 @db.Uuid
+  correctionId   String?                 @db.Uuid
+  uploadedById   String?                 @db.Uuid
+  kind           InventoryAttachmentKind @default(PHOTO)
+  fileName       String
+  mimeType       String
+  storagePath    String
+  sizeBytes      Int
+  createdAt      DateTime                @default(now())
+
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign       InventoryCampaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  anomaly        InventoryAnomaly?       @relation(fields: [anomalyId], references: [id], onDelete: SetNull)
+  observation    InventoryObservation?   @relation(fields: [observationId], references: [id], onDelete: SetNull)
+  correction     InventoryCorrection?    @relation(fields: [correctionId], references: [id], onDelete: SetNull)
+  uploadedBy     User?                   @relation("InventoryAttachmentsUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, campaignId])
+  @@index([anomalyId])
+  @@index([observationId])
+  @@index([correctionId])
+  @@map("inventory_attachments")
+}
+
+model IamRole {
+  id          String              @id @default(uuid()) @db.Uuid
+  code        String              @unique
+  label       String
+  description String
+  isSystem    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  users       IamUserRole[]
+  permissions IamRolePermission[]
+
+  @@map("iam_roles")
+}
+
+model IamPermission {
+  id          String              @id @default(uuid()) @db.Uuid
+  code        String              @unique
+  label       String
+  description String
+  domain      String
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  roles       IamRolePermission[]
+
+  @@map("iam_permissions")
+}
+
+model IamRolePermission {
+  id           String        @id @default(uuid()) @db.Uuid
+  roleId       String        @db.Uuid
+  permissionId String        @db.Uuid
+  createdAt    DateTime      @default(now())
+  role         IamRole       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   IamPermission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("iam_role_permissions")
+}
+
+model IamAccessScope {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  type           IamAccessScopeType
+  code           String
+  label          String
+  parentScopeId  String?            @db.Uuid
+  spatialNodeId  String?            @db.Uuid
+  externalRef    String?
+  isActive       Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parentScope    IamAccessScope?    @relation("IamScopeHierarchy", fields: [parentScopeId], references: [id], onDelete: SetNull)
+  childScopes    IamAccessScope[]   @relation("IamScopeHierarchy")
+  spatialNode    SpatialNode?       @relation(fields: [spatialNodeId], references: [id], onDelete: SetNull)
+  userRoles      IamUserRole[]
+
+  @@unique([organizationId, type, code])
+  @@unique([spatialNodeId])
+  @@index([organizationId])
+  @@index([parentScopeId])
+  @@index([spatialNodeId])
+  @@map("iam_access_scopes")
+}
+
+model IamUserRole {
+  id           String          @id @default(uuid()) @db.Uuid
+  userId       String          @db.Uuid
+  roleId       String          @db.Uuid
+  scopeId      String?         @db.Uuid
+  assignedById String?         @db.Uuid
+  createdAt    DateTime        @default(now())
+  user         User            @relation("IamUserRolesUser", fields: [userId], references: [id], onDelete: Cascade)
+  role         IamRole         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  scope        IamAccessScope? @relation(fields: [scopeId], references: [id], onDelete: SetNull)
+  assignedBy   User?           @relation("IamUserRolesAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([roleId])
+  @@index([scopeId])
+  @@map("iam_user_roles")
+}

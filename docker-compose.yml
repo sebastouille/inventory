@@ -1,0 +1,55 @@
+name: inventory-app
+
+services:
+  # Frontend Opérateur (Port 3010)
+  web:
+    image: node:20-alpine # Ou node:18-alpine / node:24-alpine selon tes préférences
+    working_dir: /app
+    volumes:
+      - ./web:/app
+      - /app/.next # Évite de surcharger Windows avec le cache Next.js
+      - /app/node_modules
+    command: npm run dev # Qui appelle "next dev -H 0.0.0.0 -p 3010"
+    ports:
+      - "3010:3010"
+    environment:
+      - PORT=3010
+      - NEXT_PUBLIC_API_URL=http://localhost:3011
+
+  # Frontend Administration (Port 3014)
+  admin:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./admin:/app
+      - /app/.next
+      - /app/node_modules
+    command: npm run dev # Qui appelle "next dev -H 0.0.0.0 -p 3014"
+    ports:
+      - "3014:3014"
+    environment:
+      - PORT=3014
+      - NEXT_PUBLIC_API_URL=http://localhost:3011
+
+  # Base de données PostgreSQL (Isolée sur le port 5560)
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+      POSTGRES_DB: inventory
+    ports:
+      - "5560:5432"
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+
+  # Serveur de Mail (Isolé sur les ports 1035 et 8035)
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "1035:1025"
+      - "8035:8025"
+
+volumes:
+  inventory-db-data: {}

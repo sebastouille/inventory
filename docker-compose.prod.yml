@@ -1,0 +1,75 @@
+name: inventory-app
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${INVENTORY_POSTGRES_USER:?INVENTORY_POSTGRES_USER is required in production}
+      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD:?INVENTORY_POSTGRES_PASSWORD is required in production}
+      POSTGRES_DB: ${INVENTORY_POSTGRES_DB:?INVENTORY_POSTGRES_DB is required in production}
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    command: >
+      sh -lc 'npx prisma migrate deploy --schema /app/prisma/schema.prisma &&
+      if printenv INVENTORY_BOOTSTRAP_ENABLED | grep -qx true; then
+      node apps/api/dist/src/bootstrap/production-bootstrap.js;
+      fi &&
+      node apps/api/dist/src/main.js'
+    environment:
+      NODE_ENV: production
+      PORT: 3011
+      DATABASE_URL: ${INVENTORY_DATABASE_URL:?INVENTORY_DATABASE_URL is required in production}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required in production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required in production}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://inventory.gestionai.fr,https://admin.inventory.gestionai.fr}
+      INVENTORY_BOOTSTRAP_ENABLED: ${INVENTORY_BOOTSTRAP_ENABLED:-false}
+      INVENTORY_BOOTSTRAP_ORGANIZATION_NAME: ${INVENTORY_BOOTSTRAP_ORGANIZATION_NAME:-Inventory}
+      INVENTORY_BOOTSTRAP_ORGANIZATION_SLUG: ${INVENTORY_BOOTSTRAP_ORGANIZATION_SLUG:-}
+      INVENTORY_BOOTSTRAP_ADMIN_EMAIL: ${INVENTORY_BOOTSTRAP_ADMIN_EMAIL:-}
+      INVENTORY_BOOTSTRAP_ADMIN_PASSWORD: ${INVENTORY_BOOTSTRAP_ADMIN_PASSWORD:-}
+      INVENTORY_BOOTSTRAP_ADMIN_NAME: ${INVENTORY_BOOTSTRAP_ADMIN_NAME:-Inventory Admin}
+      INVENTORY_BOOTSTRAP_ADMIN_MUST_CHANGE_PASSWORD: ${INVENTORY_BOOTSTRAP_ADMIN_MUST_CHANGE_PASSWORD:-true}
+    expose:
+      - "3011"
+    depends_on:
+      - db
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.inventory.gestionai.fr/api/v1}
+      API_BASE_URL: ${API_BASE_URL:-http://api:3011/api/v1}
+      NEXT_PUBLIC_WEB_APP_URL: ${NEXT_PUBLIC_WEB_APP_URL:-https://inventory.gestionai.fr}
+    expose:
+      - "3010"
+    depends_on:
+      - api
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.inventory.gestionai.fr/api/v1}
+      API_BASE_URL: ${API_BASE_URL:-http://api:3011/api/v1}
+      NEXT_PUBLIC_WEB_APP_URL: ${NEXT_PUBLIC_WEB_APP_URL:-https://inventory.gestionai.fr}
+    expose:
+      - "3014"
+    depends_on:
+      - api
+
+volumes:
+  inventory-db-data: {}

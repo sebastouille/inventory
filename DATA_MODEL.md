@@ -1,0 +1,144 @@
+# Modele de donnees
+
+## Objet
+
+Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec `prisma/schema.prisma`, mais expliquer ici les objets en langage fonctionnel.
+
+## Points cle actuels
+
+- `Organization` porte le perimetre tenant
+- le bootstrap production peut creer l `Organization` initiale a partir des variables Dokploy, sans seed demo
+- `Organization.settings` porte maintenant aussi :
+  - la configuration visuelle tenant-aware du referentiel spatial
+  - la politique IAM spatiale de l organisation
+- `User` represente un utilisateur tenant avec etat d'activation et indicateur `mustChangePassword`
+- entites IAM :
+  - `IamRole`
+  - `IamPermission`
+  - `IamRolePermission`
+  - `IamAccessScope`
+  - `IamUserRole`
+- le bootstrap production cree le catalogue `IamPermission`, le role global `ADMINISTRATOR`, les liaisons `IamRolePermission`, puis une liaison `IamUserRole` globale pour l admin initial
+- referentiel patrimonial `assets` :
+  - `EquipmentCategory`
+  - `EquipmentFamily`
+  - `EquipmentSubfamily`
+  - `EquipmentType`
+  - `EquipmentBrand`
+  - `EquipmentModel`
+  - `EquipmentStatus`
+  - `OwnerEntity`
+  - `Immobilization`
+  - `Equipment`
+  - `EquipmentAssignment`
+  - `EquipmentMovement`
+  - `EquipmentFamilyAttachmentRule`
+- import transverse :
+- `ImportProfile`
+- `ImportJob`
+- `ImportJobWrite`
+- recherche globale transverse V1 :
+  - aucun nouveau modele persistant
+  - projection en lecture sur `Equipment`, `InventoryCampaign`, `SpatialNode`, `Immobilization`, `ImportJob` et `ImportProfile`
+- carte 3D BIM simplifiee :
+  - `Bim3dMap`
+  - `Bim3dMapBuild`
+  - fichier scene JSON hors base sous `.runtime/bim-3d`
+  - fichier IFC source et extraction geometrique technique hors base quand la carte est generee depuis IFC
+- campagnes terrain equipements :
+  - `InventoryCampaign`
+  - `InventoryCampaignScope`
+  - `InventoryCampaignFamilyFilter`
+  - `InventoryCampaignExpectedItem`
+  - `InventoryObservation`
+  - `InventoryAnomaly`
+  - `InventoryCorrection`
+  - `InventorySyncBatch`
+  - `InventoryAttachment`
+- referentiel spatial :
+  - `SpatialNode`
+- audit :
+  - `AuditLog`
+
+## Regles metier explicites
+
+- `Equipment` represente un equipement patrimonial unitaire, tenant-aware, avec archivage logique via `isDeleted` et `deletedAt`
+- `User.mustChangePassword` force un changement de mot de passe au prochain login ; il est active par un reset admin et remis a `false` uniquement apres completion reussie du changement force
+- l admin cree par bootstrap production peut etre marque `mustChangePassword=true` via `INVENTORY_BOOTSTRAP_ADMIN_MUST_CHANGE_PASSWORD`, valeur active par defaut
+- le bootstrap production ne met pas a jour le `passwordHash` d un admin existant afin d eviter une rotation involontaire a chaque redemarrage
+- `Equipment` porte maintenant une localisation courante directe via `currentSpatialNodeId`
+- `internalCode` reste l unicite terrain principale ; `serialNumber` est optionnel ; `numPiece` stocke le numero de piece metier si la source le fournit ; `externalRef` stocke une reference source externe utile aux imports ; `barcode` et `qrCode` sont retires du modele metier `Equipment`
+- `Equipment` porte aussi les dates `receivedAt`, `commissionedAt`, `lastInventoryAt` et la provenance optionnelle `initializedByImportJobId`
+- `Immobilization` represente une immobilisation comptable distincte du bien physique, avec `code` unique par organisation, informations comptables libres V1, provenance source et archivage logique
+- `Equipment.immobilizationId` est optionnel ; une immobilisation peut couvrir plusieurs equipements et un equipement peut rester non rapproche comptablement
+- l archivage logique d une immobilisation ne detache pas automatiquement les equipements rattaches en V1
+- la chaine de classification suit `categorie -> famille -> sous-famille -> type`
+- `EquipmentModel` depend d une `EquipmentBrand` et peut etre marque comme generique
+- `EquipmentAssignment` porte toujours une affectation polymorphe `PERSON | LOCATION | ASSET`, mais `LOCATION` est maintenant legacy et ne doit plus etre la source de verite de la localisation courante
+- `EquipmentMovement` porte le journal metier des mouvements d equipements unitaires, avec type de mouvement, source, trigger, snapshots de localisation et snapshots d affectation
+- `EquipmentMovement` est derive automatiquement des mutations `assets` ; il complete `AuditLog` sans le remplacer
+- `StockMovement` reste reserve aux mouvements de stock du domaine `products`
+- les rattachements entre assets sont controles par `EquipmentFamilyAttachmentRule`
+- `ImportProfile` represente un template de mapping ETL par organisation, domaine cible et type de source
+- `ImportJob` represente une execution d import par organisation avec statut, source chargee, snapshot d en-tetes, mappings resolus, resume et rapport
+- `ImportJobWrite` represente une ecriture metier reelle appliquee par `imports.execute`, avec type d operation `CREATED` ou `UPDATED`, entite cible, domaine et chemin cible optionnel
+- aucun modele dedie n est ajoute pour le challenge de changement de mot de passe V1 ; le challenge repose sur un JWT court derive de l etat courant du `passwordHash`
+- la recherche globale V1 est une projection runtime uniquement ; elle ne persiste ni index metier dedie ni table de suggestion en base dans cette vague
+- les domaines cibles actuellement prepares par `imports` sont `spatial-nodes`, `equipments` et `immobilizations`
+- l assistant IFC4 ne cree pas de nouvelle table ; il transforme le fichier IFC4 en lignes source pour les domaines imports existants
+- les corrections IFC4 de preview sont transmises comme payload multipart ephemere et ne sont pas persistees dans un modele dedie en V1
+- les mappings de proprietes IFC4 equipements sont aussi des options ephemeres en V1 ; ils ne creent pas de table de profil et servent seulement a transformer les proprietes `IfcPropertySingleValue` en codes de referentiels assets et champs equipement (`internalCode`, `numPiece`, `externalRef`) avant creation de job
+- les donnees source IFC4 sont conservees dans les champs existants :
+  - `SpatialNode.externalRef` pour le GlobalId ou la reference source
+  - `SpatialNode.sourceClass` pour la classe IFC ou la provenance technique
+  - `SpatialNode.sourceMetadata` pour les proprietes source utiles
+  - `Equipment.externalRef` pour une reference source externe prioritaire
+  - `Equipment.numPiece` pour le numero de piece metier extrait si disponible
+  - `Equipment.technicalCharacteristics` pour les proprietes IFC conservees lors de l import equipements
+- `Bim3dMap` represente une carte 3D simplifiee generee pour une organisation, eventuellement rattachee a un `ImportJob`
+- `Bim3dMapBuild` represente une tentative de generation de scene, avec statut, duree, erreurs et resume
+- le fichier scene contient les bounding boxes simplifiees des noeuds, les positions de cubes equipements, les couleurs de rendu et les buckets d anciennete d inventaire
+- le fichier scene peut aussi contenir la source de geometrie, les bounding boxes monde IFC, l origine de scene, les statistiques IfcOpenShell et les reperes d etage
+- `SpatialNode` et `Equipment` conservent maintenant la geometrie IFC persistante quand elle est extraite :
+  - `geometrySource`
+  - `geometryMetadata`
+  - `worldCenterX`, `worldCenterY`, `worldCenterZ`
+  - `worldSizeX`, `worldSizeY`, `worldSizeZ`
+  - `geometryUpdatedAt`
+- les dimensions stockees sont des bounding boxes en metres et non des mesures certifiees
+- une ligne IFC sans geometrie exploitable ne doit pas effacer une geometrie deja persistante
+- les maillages lourds IFC ne sont pas stockes en base en V1
+- le catalogue import `immobilizations` expose les champs comptables V1 et son execution reelle cree ou met a jour `Immobilization` par `organizationId + code`
+- le catalogue import `equipments` expose `currentSpatialPath`, `currentSpatialExternalRef`, `currentSpatialCode` et `immobilizationCode`; son execution reelle cree ou met a jour `Equipment` par `organizationId + internalCode`
+- la resolution spatiale d un equipement importe utilise `currentSpatialPath` en priorite, puis `currentSpatialExternalRef`, puis `currentSpatialCode` seulement si le code est unique dans l organisation
+- `SpatialNode` represente le referentiel spatial hierarchique metier, avec `type`, `path`, `parentId`, provenance d import et compatibilite legacy via `legacyLocationId`
+- les champs `SpatialNode.path` et `SpatialNode.depth` ne doivent pas etre poses librement par les flux applicatifs ; ils sont derives par le service spatial a partir du type, du code et du parent resolu
+- `Organization.settings.spatialDisplay.nodeTypes` stocke, pour chaque `SpatialNodeType`, une paire `icon + color`
+- `Organization.settings.iam.spatialScopePolicy` arbitre l interpretation des affectations scopees :
+  - `SCOPED` = les scopes restreignent l acces
+  - `ORGANIZATION_WIDE` = les scopes restent stockes mais sont ignores pour l acces effectif
+- `IamAccessScope` reste le support des affectations IAM, mais il reference desormais optionnellement `SpatialNode` via `spatialNodeId`
+- `IamUserRole.scopeId` reste stocke meme en mode `ORGANIZATION_WIDE` ; il ne doit pas etre supprime ni migre automatiquement dans cette vague
+- l unicite spatiale est portee par `organizationId + parentId + code` et par `organizationId + path`
+- `SpatialNode.externalSource`, `externalRef`, `sourceClass` et `sourceMetadata` reservent la compatibilite future IFC4 sans imposer de versioning fort en V1
+- la purge V1 des imports s appuie sur `ImportJobWrite` plutot que sur `SpatialNode.lastImportJobId`, car il faut distinguer creation et mise a jour
+- la purge V1 ne supprime que les entites tracees en `CREATED` pour les domaines supportes `spatial-nodes`, `equipments` et `immobilizations`, jamais les `UPDATED`
+- les scopes IAM spatiaux sont synchronises depuis `SpatialNode`, ce qui preserve les affectations RBAC tout en evitant une seconde hierarchie metier divergente
+- `Location` reste present de facon transitoire pour la compatibilite legacy, mais les nouveaux imports spatiaux ciblent `SpatialNode`
+- un backfill applicatif `EquipmentAssignment LOCATION -> Equipment.currentSpatialNodeId` existe pour convertir les donnees legacy avant extinction progressive de ce flux
+- `products` reste un domaine distinct et ne remplace pas `Equipment`
+- `InventoryCampaign` pilote une campagne terrain equipements et reste distinct du domaine stock `inventory`
+- `InventoryCampaignScope` definit le perimetre spatial d une campagne avec inclusion optionnelle des enfants
+- `InventoryCampaignExpectedItem` fige l equipement attendu et sa localisation au moment de l ouverture
+- `InventoryObservation` trace chaque scan terrain avec un `clientObservationId` idempotent pour eviter les doublons en reprise offline
+- `InventoryObservation` conserve maintenant aussi la source de scan `CAMERA | HID | MANUAL`, une indication appareil optionnelle et la date client du scan si elle est fournie
+- `InventoryAnomaly` represente uniquement un ecart : `WRONG_LOCATION`, `UNKNOWN_CODE`, `MISSING`, `DUPLICATE` ou `OUT_OF_SCOPE`
+- `InventoryCorrection` porte la decision superviseur et peut appliquer une localisation, un statut, une demande de re-etiquetage ou un lien immobilisation manuel
+- `InventoryAttachment` reserve le stockage de photos et pieces jointes sous `.runtime/inventory-attachments`
+- les exports etiquettes ne creent pas de table dediee ; le payload est derive a la demande depuis `Equipment.internalCode` ou `SpatialNode.id`
+- le bootstrap production ne cree pas de `Location`, `SpatialNode`, `Product`, `Supplier`, `Equipment`, `Immobilization`, `InventoryCampaign` ou donnee de demonstration associee
+## Regles de mise a jour
+
+- mettre a jour apres chaque migration qui change le sens metier des donnees ;
+- lier les decisions de schema importantes aux ADR ;
+- ajouter plus tard des diagrammes ou resumes relationnels sous `docs/database/`.

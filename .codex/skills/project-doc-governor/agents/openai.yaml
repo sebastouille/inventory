@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gouvernance Doc Projet"
+  short_description: "Imposer les mises a jour doc du repo"
+  default_prompt: "Utiliser $project-doc-governor pour creer et maintenir la documentation versionnee de ce repository."

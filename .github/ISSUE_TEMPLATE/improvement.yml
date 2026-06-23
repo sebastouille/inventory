@@ -1,0 +1,36 @@
+name: Demande d'amelioration
+description: Creer une demande d'amelioration structuree liee au workflow documentaire du projet.
+title: "[Improvement]: "
+labels: ["improvement", "triage"]
+body:
+  - type: input
+    id: summary
+    attributes:
+      label: Resume
+      description: Titre court de l'amelioration demandee
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Probleme
+      description: Quel probleme essayons-nous de resoudre ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Changement propose
+      description: Que faut-il changer ?
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Impact fonctionnel, technique, UX, securite, ou donnees
+  - type: input
+    id: references
+    attributes:
+      label: References
+      description: Lier un dossier d'etape, un ADR, ou un fichier de specification si pertinent

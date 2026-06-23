@@ -1,0 +1,11 @@
+Type,Code,Libelle,Description,Path,ParentPath,ExternalRef,SourceClass,IsActive
+SITE,HQ,Site principal,Site demo,HQ,,SITE-HQ,IfcSite,true
+BUILDING,BAT-A,Batiment A,Batiment administratif,HQ/BAT-A,HQ,BLD-A,IfcBuilding,true
+FLOOR,RDC,Rez-de-chaussee,Niveau 0,HQ/BAT-A/RDC,HQ/BAT-A,FLR-RDC,IfcBuildingStorey,true
+ZONE,OPENSPACE,Open space,Zone bureaux,HQ/BAT-A/RDC/OPENSPACE,HQ/BAT-A/RDC,ZN-OPEN,IfcZone,true
+ROOM,R101,Bureau 101,Bureau individuel,HQ/BAT-A/RDC/R101,HQ/BAT-A/RDC,ROOM-R101,IfcSpace,true
+ROOM,R102,Bureau 102,Bureau individuel,HQ/BAT-A/RDC/R102,HQ/BAT-A/RDC,ROOM-R102,IfcSpace,true
+ROOM,SALLE-REUNION,Salle de reunion,Salle projet,HQ/BAT-A/RDC/SALLE-REUNION,HQ/BAT-A/RDC,SALLE-REUNION,IfcSpace,true
+FLOOR,R1,Premier etage,Niveau 1,HQ/BAT-A/R1,HQ/BAT-A,FLR-R1,IfcBuildingStorey,true
+ZONE,ARCHIVES,Zone archives,Zone documents,HQ/BAT-A/R1/ARCHIVES,HQ/BAT-A/R1,ZN-ARCH,IfcZone,true
+ROOM,R201,Bureau 201,Bureau individuel,HQ/BAT-A/R1/R201,HQ/BAT-A/R1,ROOM-R201,IfcSpace,true
