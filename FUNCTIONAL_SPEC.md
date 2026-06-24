@@ -38,6 +38,7 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - un token JWT invalide ou obsolete est traite comme une session terminee : le token local est supprime et l utilisateur revient a l ecran de connexion
 - les formulaires de connexion web et admin ne pre-remplissent plus les identifiants de demonstration ; les identifiants `admin@demo.local / ChangeMe123!` restent reserves au seed local et ne sont pas deployes comme valeurs par defaut
 - le bootstrap production Dokploy est separe du seed de demonstration : il cree uniquement l organisation initiale, le compte admin initial, le catalogue minimal de permissions et le role `ADMINISTRATOR`
+- en production Dokploy, les clients web et admin appellent l API publique `https://api.inventory.gestionai.fr/api/v1` via `NEXT_PUBLIC_API_URL` fige au build Docker, afin que le navigateur ne tente pas de joindre `localhost`
 - les listes prioritaires `users`, `roles`, `products`, `locations`, `suppliers`, `stock-movements` supportent recherche, tri, pagination 10/50/100/200 et export `.ods`
 - le module `assets` supporte recherche, filtres, archivage logique, historique et export `.ods`
 - `apps/web` sert de base PWA responsive pour poste de travail et smartphone

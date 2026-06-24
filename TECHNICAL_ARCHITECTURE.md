@@ -34,6 +34,7 @@
 - la regeneration Prisma locale passe par `scripts/prisma-generate-safe.ps1`, qui refuse `PRISMA_GENERATE_NO_ENGINE` et verifie que le client genere embarque bien l engine local Windows/Linux attendu pour `postgresql://`
 - le deploiement production Dokploy utilise `docker-compose.prod.yml` avec ports internes `web=3010`, `api=3011`, `admin=3014`, exposes via `expose` et non publies sur les ports hote
 - le compose production injecte `DATABASE_URL` dans l API depuis `INVENTORY_DATABASE_URL` et exige les secrets `JWT_SECRET` et `JWT_REFRESH_SECRET` sans fallback faible
+- le compose production transmet `NEXT_PUBLIC_API_URL`, `API_BASE_URL` et `NEXT_PUBLIC_WEB_APP_URL` comme arguments de build aux images `web` et `admin`, car Next.js fige les variables `NEXT_PUBLIC_*` dans le bundle navigateur
 - en production, `PrismaService` refuse un `DATABASE_URL` absent ou pointe vers la base `comps`
 - le demarrage API production execute `prisma migrate deploy`, puis le bootstrap production seulement si `INVENTORY_BOOTSTRAP_ENABLED=true`, puis `node apps/api/dist/src/main.js`
 - le CORS API est pilote par `CORS_ALLOWED_ORIGINS`, avec fallback local `http://localhost:3010,http://localhost:3014`

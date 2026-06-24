@@ -138,6 +138,8 @@ Variables minimales a renseigner dans Dokploy :
 - `JWT_SECRET`
 - `JWT_REFRESH_SECRET`
 
+`NEXT_PUBLIC_API_URL`, `API_BASE_URL` et `NEXT_PUBLIC_WEB_APP_URL` sont aussi transmis comme arguments de build Docker aux images `web` et `admin`. Dokploy doit donc reconstruire ces images apres modification de ces valeurs, car Next.js fige les variables `NEXT_PUBLIC_*` dans le bundle navigateur.
+
 Variables de bootstrap production optionnelles :
 
 - `INVENTORY_BOOTSTRAP_ENABLED`

@@ -8,6 +8,7 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
 
 - `Organization` porte le perimetre tenant
 - le bootstrap production peut creer l `Organization` initiale a partir des variables Dokploy, sans seed demo
+- la correction de l URL API navigateur en production ne change aucun modele persistant ni aucune migration Prisma
 - `Organization.settings` porte maintenant aussi :
   - la configuration visuelle tenant-aware du referentiel spatial
   - la politique IAM spatiale de l organisation

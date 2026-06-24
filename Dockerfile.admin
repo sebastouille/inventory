@@ -9,6 +9,12 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+ARG NEXT_PUBLIC_API_URL=https://api.inventory.gestionai.fr/api/v1
+ARG API_BASE_URL=http://api:3011/api/v1
+ARG NEXT_PUBLIC_WEB_APP_URL=https://inventory.gestionai.fr
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV API_BASE_URL=$API_BASE_URL
+ENV NEXT_PUBLIC_WEB_APP_URL=$NEXT_PUBLIC_WEB_APP_URL
 RUN npm run build --workspace @inventory/shared
 RUN npm run build --workspace admin
 

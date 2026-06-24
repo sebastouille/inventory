@@ -100,6 +100,42 @@ Preparer `inventory-app` pour un deploiement Dokploy production sur le VPS Hosti
 - les formulaires de connexion web/admin n embarquent plus les identifiants demo par defaut.
 - `.dockerignore` reduit le contexte Docker Dokploy et evite d envoyer les artefacts locaux.
 
+## Incident 2026-06-24 - URL API front production
+
+### Symptome
+
+- Le deploiement Dokploy demarre les conteneurs `web` et `api`.
+- L API NestJS affiche `Nest application successfully started`.
+- La page de connexion web affiche encore `Impossible de joindre l API (http://localhost:3011/api/v1)`.
+
+### Diagnostic
+
+- `NEXT_PUBLIC_API_URL` est bien renseigne dans l environnement runtime du service `web`.
+- Next.js fige les variables `NEXT_PUBLIC_*` pendant le build de l image, pas au demarrage du conteneur.
+- `Dockerfile.web` et `Dockerfile.admin` ne passaient pas `NEXT_PUBLIC_API_URL` et `NEXT_PUBLIC_WEB_APP_URL` au stage `builder`.
+
+### Plan correctif
+
+1. Ajouter les `ARG` et `ENV` de build dans `Dockerfile.web` et `Dockerfile.admin`.
+2. Transmettre ces arguments depuis `docker-compose.prod.yml`.
+3. Conserver les variables runtime pour la lisibilite Dokploy et les usages serveur.
+4. Mettre a jour la documentation de deploiement et le backlog bug.
+5. Verifier build, tests, config compose, build Docker puis pousser `main`.
+
+### Notes de correction
+
+- `Dockerfile.web` et `Dockerfile.admin` definissent maintenant `NEXT_PUBLIC_API_URL`, `API_BASE_URL` et `NEXT_PUBLIC_WEB_APP_URL` dans le stage `builder`.
+- `docker-compose.prod.yml` transmet ces trois valeurs comme `build.args` pour les services `web` et `admin`.
+- Les memes variables restent dans l environnement runtime Dokploy pour garder une configuration lisible.
+- Aucun changement de schema ni aucune migration Prisma n est necessaire.
+
+### Verifications incident 2026-06-24
+
+- `npm run build` : OK
+- `npm run test` : OK
+- `docker compose -f docker-compose.prod.yml config` avec variables temporaires de validation : OK
+- `docker compose -f docker-compose.prod.yml build api web admin` : OK
+
 ## Suivi
 
 - Verifications executees :
@@ -109,8 +145,9 @@ Preparer `inventory-app` pour un deploiement Dokploy production sur le VPS Hosti
   - `docker compose -f docker-compose.prod.yml build api web admin` : OK apres ajout de `.dockerignore`
 - Git :
   - branche locale : `main`
-  - remote : aucun remote configure dans cette copie
-  - dernier commit pousse : impossible a verifier, car la branche locale n avait aucun commit au debut et aucun remote n existe
-  - push : bloque tant que le remote cible n est pas fourni
+  - remote : `origin git@github.com:sebastouille/inventory.git`
+  - branche amont : `origin/main`
+  - premier push de `main` : realise avant l incident de connexion API
+  - push du correctif : realise en fin de correction apres validation locale
 - Travail differe :
-  - `IMP-025` suit la configuration du remote Git cible.
+  - `IMP-025` est clos car le remote Git cible est configure et pousse.
