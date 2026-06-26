@@ -10,7 +10,8 @@ function buildPrismaMock() {
     equipmentBrand: { findMany: vi.fn().mockResolvedValue([]) },
     equipmentModel: { findMany: vi.fn().mockResolvedValue([]) },
     equipmentStatus: { findMany: vi.fn().mockResolvedValue([]) },
-    ownerEntity: { findMany: vi.fn().mockResolvedValue([]) }
+    ownerEntity: { findMany: vi.fn().mockResolvedValue([]) },
+    spatialNode: { findMany: vi.fn().mockResolvedValue([]) }
   };
 }
 
@@ -168,5 +169,124 @@ describe("Ifc4AssistantService", () => {
     const overriddenRow = preparedInput.rawRows.find((row: { values: Record<string, string | null> }) => row.values.path === zone?.path);
     expect(overriddenRow.values.type).toBe("ROOM");
     expect(overriddenRow.values.geometrySource).toMatch(/^ifcopenshell-python/);
+  });
+
+  it("reports a ready child as not importable when its parent geometry is missing", async () => {
+    const geometryWorker = buildGeometryWorkerMock();
+    geometryWorker.extract.mockResolvedValueOnce({
+      ...await geometryWorker.extract(),
+      spatialObjects: [
+        {
+          globalId: "SITEGUID",
+          ifcEntityId: 1,
+          ifcClass: "IfcSite",
+          name: "Site principal",
+          description: null,
+          parentGlobalId: null,
+          storeyGlobalId: null,
+          bbox: null,
+          center: null,
+          size: null,
+          hasGeometry: false,
+          geometryError: "No shape"
+        },
+        {
+          globalId: "BLDGID",
+          ifcEntityId: 2,
+          ifcClass: "IfcBuilding",
+          name: "Batiment A",
+          description: null,
+          parentGlobalId: "SITEGUID",
+          storeyGlobalId: null,
+          bbox: { min: [0, 0, 0], max: [10, 10, 3] },
+          center: [5, 5, 1.5],
+          size: [10, 10, 3],
+          hasGeometry: true,
+          geometryError: null
+        }
+      ],
+      products: []
+    });
+    const service = new Ifc4AssistantService(
+      buildPrismaMock() as never,
+      { createPreparedJob: vi.fn() } as never,
+      { log: vi.fn() } as never,
+      geometryWorker as never
+    );
+    const analysis = await service.analyze(
+      { organizationId: "org-1" } as never,
+      { originalname: "sample.ifc", buffer: Buffer.from(IFC_SAMPLE, "utf8") }
+    );
+
+    const diagnostics = await (service as unknown as {
+      buildGeometryDiagnostics: (organizationId: string, analysis: typeof analysis) => Promise<{
+        items: Array<{ path: string | null; status: string; reasonCode: string | null; importable: boolean }>;
+      }>;
+    }).buildGeometryDiagnostics("org-1", analysis);
+
+    const building = diagnostics.items.find((item) => item.path === "SITE-PRINCIPAL/BATIMENT-A");
+    expect(building?.status).toBe("PARENT_INVALID");
+    expect(building?.reasonCode).toBe("PARENT_GEOMETRY_INVALID");
+    expect(building?.importable).toBe(false);
+  });
+
+  it("creates a partial spatial job with only importable rows when requested", async () => {
+    const createPreparedJob = vi.fn().mockResolvedValue({ id: "job-1", targetDomain: "spatial-nodes" });
+    const geometryWorker = buildGeometryWorkerMock();
+    geometryWorker.extract.mockResolvedValueOnce({
+      ...await geometryWorker.extract(),
+      spatialObjects: [
+        {
+          globalId: "SITEGUID",
+          ifcEntityId: 1,
+          ifcClass: "IfcSite",
+          name: "Site principal",
+          description: null,
+          parentGlobalId: null,
+          storeyGlobalId: null,
+          bbox: { min: [0, 0, 0], max: [10, 10, 3] },
+          center: [5, 5, 1.5],
+          size: [10, 10, 3],
+          hasGeometry: true,
+          geometryError: null
+        },
+        {
+          globalId: "BLDGID",
+          ifcEntityId: 2,
+          ifcClass: "IfcBuilding",
+          name: "Batiment A",
+          description: null,
+          parentGlobalId: "SITEGUID",
+          storeyGlobalId: null,
+          bbox: null,
+          center: null,
+          size: null,
+          hasGeometry: false,
+          geometryError: "No shape"
+        }
+      ],
+      products: []
+    });
+    const service = new Ifc4AssistantService(
+      buildPrismaMock() as never,
+      { createPreparedJob } as never,
+      { log: vi.fn() } as never,
+      geometryWorker as never
+    );
+
+    await service.createSpatialJob(
+      { organizationId: "org-1" } as never,
+      {
+        originalname: "sample.ifc",
+        mimetype: "application/octet-stream",
+        buffer: Buffer.from(IFC_SAMPLE, "utf8")
+      },
+      { importPolicy: "IMPORT_READY_ONLY" }
+    );
+
+    const preparedInput = createPreparedJob.mock.calls[0][1];
+    expect(preparedInput.rawRows.some((row: { values: Record<string, string | null> }) => row.values.path === "SITE-PRINCIPAL")).toBe(true);
+    expect(preparedInput.rawRows.some((row: { values: Record<string, string | null> }) => row.values.path === "SITE-PRINCIPAL/BATIMENT-A")).toBe(false);
+    expect(preparedInput.options.ifcGeometryExcludedDiagnostics.some((item: { path: string }) => item.path === "SITE-PRINCIPAL/BATIMENT-A")).toBe(true);
   });
 });

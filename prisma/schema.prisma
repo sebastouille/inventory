@@ -60,6 +60,7 @@ enum EquipmentMovementSource {
 }
 
 enum ImportTargetDomain {
+  IFC4_ANALYSIS
   SPATIAL_NODES
   EQUIPMENTS
   IMMOBILIZATIONS
@@ -92,6 +93,13 @@ enum ImportJobStatus {
 enum ImportJobWriteOperation {
   CREATED
   UPDATED
+}
+
+enum ImportJobLogLevel {
+  DEBUG
+  INFO
+  WARNING
+  ERROR
 }
 
 enum SpatialNodeType {
@@ -185,8 +193,10 @@ model Organization {
   auditLogs         AuditLog[]
   accessScopes      IamAccessScope[]
   importProfiles    ImportProfile[]
+  ifc4AssistantProfiles Ifc4AssistantProfile[]
   importJobs        ImportJob[]
   importJobWrites   ImportJobWrite[]
+  importJobLogs     ImportJobLog[]
   spatialNodes      SpatialNode[]
   equipmentCategories      EquipmentCategory[]
   equipmentFamilies        EquipmentFamily[]
@@ -229,6 +239,7 @@ model User {
   roleAssignments   IamUserRole[] @relation("IamUserRolesUser")
   assignedUserRoles IamUserRole[] @relation("IamUserRolesAssignedBy")
   createdImportProfiles ImportProfile[] @relation("ImportProfilesCreatedBy")
+  createdIfc4AssistantProfiles Ifc4AssistantProfile[] @relation("Ifc4AssistantProfilesCreatedBy")
   createdImportJobs     ImportJob[] @relation("ImportJobsCreatedBy")
   equipmentAssignments EquipmentAssignment[] @relation("EquipmentAssignmentsTargetUser")
   createdEquipmentMovements EquipmentMovement[] @relation("EquipmentMovementsCreatedBy")
@@ -411,6 +422,35 @@ model ImportProfile {
   @@index([createdById])
 }
 
+model Ifc4AssistantProfile {
+  id                      String       @id @default(uuid()) @db.Uuid
+  organizationId          String       @db.Uuid
+  name                    String
+  description             String?
+  selectedClasses         Json
+  selectedProperties      Json
+  spatialMappings         Json?
+  equipmentMappings       Json?
+  assetReferenceOverrides Json?
+  spatialTypeOverrides    Json?
+  geometryLevel           String       @default("MINIMUM")
+  maxProducts             Int          @default(5000)
+  maxShapeParts           Int          @default(12)
+  importOnlyGeometryReady Boolean      @default(false)
+  isDefault               Boolean      @default(false)
+  isArchived              Boolean      @default(false)
+  createdById             String?      @db.Uuid
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy               User?        @relation("Ifc4AssistantProfilesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isArchived])
+  @@index([organizationId, isDefault])
+  @@index([createdById])
+}
+
 model ImportJob {
   id              String             @id @default(uuid()) @db.Uuid
   organizationId  String             @db.Uuid
@@ -436,6 +476,7 @@ model ImportJob {
   profile         ImportProfile?     @relation(fields: [profileId], references: [id], onDelete: SetNull)
   createdBy       User?              @relation("ImportJobsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   writes          ImportJobWrite[]
+  logs            ImportJobLog[]
   spatialNodes    SpatialNode[]      @relation("ImportJobSpatialNodes")
   initializedEquipments Equipment[]  @relation("ImportJobInitializedEquipments")
   initializedImmobilizations Immobilization[] @relation("ImportJobInitializedImmobilizations")
@@ -499,6 +540,24 @@ model Bim3dMapBuild {
   @@index([importJobId])
   @@index([createdById])
   @@map("bim_3d_map_builds")
+}
+
+model ImportJobLog {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  jobId          String            @db.Uuid
+  level          ImportJobLogLevel @default(INFO)
+  step           String?
+  message        String
+  metadata       Json?
+  createdAt      DateTime          @default(now())
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  job            ImportJob         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, jobId, createdAt])
+  @@index([jobId, level])
+  @@map("import_job_logs")
 }
 
 model ImportJobWrite {

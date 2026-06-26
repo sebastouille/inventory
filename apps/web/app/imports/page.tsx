@@ -3,6 +3,7 @@
 import type {
   CurrentUserResponse,
   ImportJobDetail,
+  ImportJobLogEntry,
   ImportJobPurgeCreatedDataResult,
   ImportJobReport,
   ImportJobSummary,
@@ -13,14 +14,26 @@ import type {
   ImportSourceKind,
   ImportTargetDomain,
   ImportTargetFieldDefinition,
+  Ifc4AnalyzeJobResponse,
   Ifc4AnalysisResponse,
+  Ifc4AssistantProfileDetail,
+  Ifc4AssistantProfileSummary,
   Ifc4AssetReferenceCandidate,
   Ifc4AssetReferencesApplyResult,
-  Ifc4CreateJobResponse,
+  Ifc4CancelJobResponse,
   Ifc4EquipmentPropertyMappings,
   Ifc4EquipmentPreviewRow,
+  Ifc4GeometryDiagnosticsResponse,
+  Ifc4GeometryFilter,
+  Ifc4GeometryLevel,
+  Ifc4ImportPolicy,
   Ifc4PropertyCandidate,
+  Ifc4QuickParseResponse,
   Ifc4SpatialPreviewNode,
+  Ifc4WorkflowAction,
+  Ifc4WorkflowActionResponse,
+  Ifc4WorkflowChildDomain,
+  Ifc4WorkflowResponse,
   OrganizationSettings,
   OrganizationSpatialDisplaySettings,
   PaginatedResponse,
@@ -77,11 +90,11 @@ import {
   XCircleIcon
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, type ReactNode, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ImportsHelpPanel } from "@/components/imports-help-panel";
 import { WebAuthScreen } from "@/components/web-auth-screen";
-import { ApiError, apiFetch, apiUpload, isUnauthorizedApiError } from "@/lib/api";
+import { ApiError, apiDownload, apiFetch, apiUpload, isUnauthorizedApiError } from "@/lib/api";
 import { buildQueryString } from "@/lib/query-string";
 import { buildPathWithQuery } from "@/lib/url-query";
 import { useStoredToken } from "@/lib/session";
@@ -133,9 +146,18 @@ type Ifc4EquipmentValidationRow = Ifc4EquipmentPreviewRow & {
 
 type Ifc4EquipmentPropertyMappingField = keyof Required<Ifc4EquipmentPropertyMappings>;
 
+type IfcClassTreeNode = {
+  id: string;
+  label: string;
+  count: number;
+  children?: IfcClassTreeNode[];
+  sourceClass?: string;
+};
+
 const NONE_VALUE = "__none__";
 
 const TARGET_DOMAIN_LABELS: Record<ImportTargetDomain, string> = {
+  "ifc4-analysis": "Analyse IFC4",
   "spatial-nodes": "Referentiel spatial",
   equipments: "Referentiel equipements",
   immobilizations: "Referentiel immobilisations"
@@ -158,6 +180,80 @@ function canDeleteJob(job: Pick<ImportJobSummary, "status"> | Pick<ImportJobDeta
 const EXECUTABLE_DOMAINS = new Set<ImportTargetDomain>(["spatial-nodes", "equipments", "immobilizations"]);
 const TERMINAL_JOB_STATUSES = new Set<ImportJobStatus>(["COMPLETED", "FAILED", "CANCELLED"]);
 const IFC_PREVIEW_PAGE_SIZE = 10;
+
+const IFC_CLASS_GROUP_ORDER = [
+  "Structure spatiale",
+  "Produits et equipements",
+  "Relations IFC",
+  "Proprietes et classifications",
+  "Representation et geometrie",
+  "Unites et mesures",
+  "Autres classes IFC"
+];
+
+function ifcClassTreePath(sourceClass: string) {
+  if (["IFCPROJECT", "IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCSPACE"].includes(sourceClass)) {
+    return ["Structure spatiale", "Noeuds spatiaux"];
+  }
+  if (["IFCFURNITURE", "IFCFURNISHINGELEMENT", "IFCELEMENTASSEMBLY"].includes(sourceClass)) {
+    return ["Produits et equipements", "Mobilier et assemblages"];
+  }
+  if (sourceClass.startsWith("IFCBUILDINGELEMENT")) {
+    return ["Produits et equipements", "Elements de batiment"];
+  }
+  if (sourceClass.startsWith("IFCDISTRIBUTION") || sourceClass.startsWith("IFCFLOW")) {
+    return ["Produits et equipements", "Reseaux et terminaux"];
+  }
+  if (sourceClass.endsWith("ELEMENT") || sourceClass.includes("ELEMENT")) {
+    return ["Produits et equipements", "Autres elements"];
+  }
+  if (sourceClass.startsWith("IFCREL")) {
+    return ["Relations IFC", "Relations"];
+  }
+  if (sourceClass.includes("CLASSIFICATION")) {
+    return ["Proprietes et classifications", "Classifications"];
+  }
+  if (sourceClass.startsWith("IFCPROPERTY") || sourceClass.includes("PROPERTY") || sourceClass.includes("QUANTITY")) {
+    return ["Proprietes et classifications", "Proprietes et quantites"];
+  }
+  if (sourceClass.includes("MATERIAL")) {
+    return ["Representation et geometrie", "Materiaux"];
+  }
+  if (
+    sourceClass.includes("REPRESENTATION") ||
+    sourceClass.includes("SHAPE") ||
+    sourceClass.includes("STYLE") ||
+    sourceClass.includes("PRESENTATION") ||
+    sourceClass.includes("PLACEMENT") ||
+    sourceClass.includes("CARTESIAN") ||
+    sourceClass.includes("DIRECTION") ||
+    sourceClass.includes("CURVE") ||
+    sourceClass.includes("SURFACE") ||
+    sourceClass.includes("POLY")
+  ) {
+    return ["Representation et geometrie", "Geometrie et rendu"];
+  }
+  if (sourceClass.includes("UNIT") || sourceClass.includes("MEASURE") || sourceClass.includes("DIMENSION")) {
+    return ["Unites et mesures", "Unites et dimensions"];
+  }
+  return ["Autres classes IFC", "Autres"];
+}
+
+function sortIfcGroup(left: IfcClassTreeNode, right: IfcClassTreeNode) {
+  const leftIndex = IFC_CLASS_GROUP_ORDER.indexOf(left.label);
+  const rightIndex = IFC_CLASS_GROUP_ORDER.indexOf(right.label);
+  if (leftIndex !== -1 || rightIndex !== -1) {
+    return (leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex) - (rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex);
+  }
+  return right.count - left.count || left.label.localeCompare(right.label);
+}
+
+function collectIfcClasses(node: IfcClassTreeNode): string[] {
+  if (node.sourceClass) {
+    return [node.sourceClass];
+  }
+  return (node.children ?? []).flatMap(collectIfcClasses);
+}
 
 function geometryBadgeLabel(status: string | undefined) {
   if (status === "READY") return "Geometrie OK";
@@ -346,22 +442,97 @@ function getStatusTone(status: ImportJobStatus | ImportJobReport["rows"][number]
   return "muted";
 }
 
-function StatusPill({ label }: { label: ImportJobStatus | ImportJobReport["rows"][number]["status"] }) {
+function StatusPill({
+  label,
+  onClick,
+  title
+}: {
+  label: ImportJobStatus | ImportJobReport["rows"][number]["status"];
+  onClick?: () => void;
+  title?: string;
+}) {
   const tone = getStatusTone(label);
-  return (
-    <span
-      className={
-        tone === "success"
-          ? "inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700"
-          : tone === "danger"
-            ? "inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-700"
-            : tone === "warning"
-              ? "inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-700"
-              : "inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-xs font-semibold text-muted-foreground"
+  const className =
+    tone === "success"
+      ? "inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-700"
+      : tone === "danger"
+        ? "inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-700"
+        : tone === "warning"
+          ? "inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-semibold text-amber-700"
+          : "inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-xs font-semibold text-muted-foreground";
+  if (onClick) {
+    return (
+      <button type="button" className={`${className} transition hover:scale-[1.02]`} onClick={onClick} title={title}>
+        {label}
+      </button>
+    );
+  }
+  return <span className={className}>{label}</span>;
+}
+
+function IfcWorkflowStepStatus({
+  title,
+  job,
+  report,
+  logs,
+  onCancel
+}: {
+  title: string;
+  job: ImportJobDetail | null | undefined;
+  report: ImportJobReport | null | undefined;
+  logs: ImportJobLogEntry[];
+  onCancel?: () => void;
+}) {
+  if (!job && !report && logs.length === 0) {
+    return null;
+  }
+  const statusCounts = report
+    ? {
+        created: report.rows.filter((row) => row.status === "CREATED").length,
+        updated: report.rows.filter((row) => row.status === "UPDATED").length,
+        noop: report.rows.filter((row) => row.status === "NO_OP").length,
+        rejected: report.rows.filter((row) => row.status === "REJECTED").length
       }
-    >
-      {label}
-    </span>
+    : null;
+  return (
+    <div className="mt-4 rounded-2xl border border-border/60 bg-background/80 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-semibold text-foreground">{title}</p>
+          <p className="text-sm text-muted-foreground">Etat du job pilote par l assistant IFC4.</p>
+        </div>
+        {job?.status ? (
+          <StatusPill
+            label={job.status}
+            onClick={job.status === "RUNNING" ? onCancel : undefined}
+            title={job.status === "RUNNING" ? "Annuler ce traitement" : undefined}
+          />
+        ) : null}
+      </div>
+      {report ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-7">
+          <ReadOnlyField label="Lignes" value={formatNumber(report.summary.rowsRead)} />
+          <ReadOnlyField label="Valides" value={formatNumber(report.summary.rowsValid)} />
+          <ReadOnlyField label="Rejetees" value={formatNumber(report.summary.rowsRejected)} />
+          <ReadOnlyField label="A creer" value={formatNumber(statusCounts?.created ?? 0)} />
+          <ReadOnlyField label="A mettre a jour" value={formatNumber(statusCounts?.updated ?? 0)} />
+          <ReadOnlyField label="Sans changement" value={formatNumber(statusCounts?.noop ?? 0)} />
+          <ReadOnlyField label="Ecritures" value={formatNumber(report.summary.appliedWrites || report.summary.simulatedWrites)} />
+        </div>
+      ) : null}
+      {logs.length > 0 ? (
+        <div className="mt-4 max-h-52 space-y-2 overflow-auto rounded-xl border border-border/50 bg-muted/20 p-3 font-mono text-xs">
+          {logs.slice(-10).map((log) => (
+            <div key={log.id} className={log.level === "ERROR" ? "text-red-600" : log.level === "WARNING" ? "text-amber-700" : "text-foreground"}>
+              <span className="text-muted-foreground">{new Date(log.createdAt).toLocaleTimeString("fr-FR")}</span>
+              <span className="mx-2 rounded-full border border-border/60 px-2 py-0.5">{log.level}</span>
+              {log.step ? <span className="mr-2 text-sky-700">{log.step}</span> : null}
+              <span>{log.message}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -487,8 +658,24 @@ function ImportsPageContent() {
   const [pendingPurgeJob, setPendingPurgeJob] = useState<ImportJobSummary | null>(null);
   const [pendingDeleteJob, setPendingDeleteJob] = useState<ImportJobSummary | ImportJobDetail | null>(null);
   const [ifcFile, setIfcFile] = useState<File | null>(null);
+  const [ifcQuickParse, setIfcQuickParse] = useState<Ifc4QuickParseResponse | null>(null);
   const [ifcAnalysis, setIfcAnalysis] = useState<Ifc4AnalysisResponse | null>(null);
+  const [ifcAnalysisJobId, setIfcAnalysisJobId] = useState<string | null>(null);
+  const [ifcWorkflow, setIfcWorkflow] = useState<Ifc4WorkflowResponse | null>(null);
+  const [ifcJobLogs, setIfcJobLogs] = useState<ImportJobLogEntry[]>([]);
   const [ifcSelectedClasses, setIfcSelectedClasses] = useState<string[]>(["IFCFURNITURE"]);
+  const [ifcExpandedClassGroups, setIfcExpandedClassGroups] = useState<string[]>(["Structure spatiale", "Produits et equipements"]);
+  const [ifcMaxProducts, setIfcMaxProducts] = useState("5000");
+  const [ifcGeometryLevel, setIfcGeometryLevel] = useState<Ifc4GeometryLevel>("MINIMUM");
+  const [ifcMaxShapeParts, setIfcMaxShapeParts] = useState("12");
+  const [ifcImportPolicy, setIfcImportPolicy] = useState<Ifc4ImportPolicy>("STRICT_ALL_READY");
+  const [ifcGeometryFilter, setIfcGeometryFilter] = useState<Ifc4GeometryFilter>("all");
+  const [ifcSpatialGeometryFilter, setIfcSpatialGeometryFilter] = useState<Ifc4GeometryFilter>("all");
+  const [ifcEquipmentGeometryFilter, setIfcEquipmentGeometryFilter] = useState<Ifc4GeometryFilter>("all");
+  const [ifcGeometryDiagnostics, setIfcGeometryDiagnostics] = useState<Ifc4GeometryDiagnosticsResponse | null>(null);
+  const [ifcAssistantProfiles, setIfcAssistantProfiles] = useState<Ifc4AssistantProfileSummary[]>([]);
+  const [selectedIfcAssistantProfileId, setSelectedIfcAssistantProfileId] = useState("none");
+  const [ifcAssistantProfileName, setIfcAssistantProfileName] = useState("");
   const [ifcDefaultStatusCode, setIfcDefaultStatusCode] = useState("EN_SERVICE");
   const [ifcDefaultOwnerCode, setIfcDefaultOwnerCode] = useState("CPRP");
   const [ifcEquipmentPropertyMappings, setIfcEquipmentPropertyMappings] =
@@ -525,6 +712,7 @@ function ImportsPageContent() {
   const currentPreviewRows = currentJob?.sourceSnapshot?.previewRows ?? [];
   const currentReport = currentJob?.report ?? null;
   const selectedProfileSummary = profilesResponse?.items.find((profile) => profile.id === selectedProfile?.id) ?? null;
+  const selectedIfcAssistantProfile = ifcAssistantProfiles.find((profile) => profile.id === selectedIfcAssistantProfileId) ?? null;
   const canUpload = hasImportsManage && domainIsExecutable && Boolean(currentJob);
   const canRun = hasImportsExecute && domainIsExecutable && Boolean(currentJob?.sourceSnapshot?.rawRowsRef);
   const canPersistProfile = hasImportsManage && Boolean(currentJob?.sourceKind);
@@ -558,15 +746,70 @@ function ImportsPageContent() {
     rowIndex: row.rowIndex,
     values: row.values
   }));
-  const ifcMissingReferences = ifcAnalysis?.assetReferences.filter((reference) => !reference.exists) ?? [];
+  const ifcMissingReferences = (ifcWorkflow?.assetReferences.candidates ?? ifcAnalysis?.assetReferences ?? []).filter((reference) => !reference.exists);
   const ifcSpatialRows = ifcAnalysis?.spatialNodes ?? [];
-  const ifcAssetRows = ifcAnalysis?.assetReferences ?? [];
+  const ifcAssetRows = ifcWorkflow?.assetReferences.candidates ?? ifcAnalysis?.assetReferences ?? [];
   const ifcEquipmentRows = ifcAnalysis?.equipmentRows ?? [];
-  const ifcPropertyCandidates = ifcAnalysis?.propertyCandidates ?? [];
+  const ifcClassSelectionItems = ifcQuickParse?.classSummary ?? ifcAnalysis?.classSummary ?? [];
+  const ifcPropertyCandidates = ifcAnalysis?.propertyCandidates ?? ifcQuickParse?.propertyCandidates ?? [];
+  const ifcClassTree = useMemo<IfcClassTreeNode[]>(() => {
+    const rootMap = new Map<string, IfcClassTreeNode>();
+    for (const item of ifcClassSelectionItems) {
+      const [rootLabel, subgroupLabel] = ifcClassTreePath(item.sourceClass);
+      let root = rootMap.get(rootLabel);
+      if (!root) {
+        root = { id: rootLabel, label: rootLabel, count: 0, children: [] };
+        rootMap.set(rootLabel, root);
+      }
+      let subgroup = root.children?.find((child) => child.label === subgroupLabel);
+      if (!subgroup) {
+        subgroup = { id: `${rootLabel}/${subgroupLabel}`, label: subgroupLabel, count: 0, children: [] };
+        root.children?.push(subgroup);
+      }
+      subgroup.children?.push({
+        id: item.sourceClass,
+        label: item.sourceClass,
+        count: item.count,
+        sourceClass: item.sourceClass
+      });
+      subgroup.count += item.count;
+      root.count += item.count;
+    }
+    return [...rootMap.values()]
+      .map((root) => ({
+        ...root,
+        children: (root.children ?? [])
+          .map((subgroup) => ({
+            ...subgroup,
+            children: (subgroup.children ?? []).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+          }))
+          .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+      }))
+      .sort(sortIfcGroup);
+  }, [ifcClassSelectionItems]);
+  const canStartIfcPreview = Boolean(
+    hasImportsManage &&
+    ifcAnalysisJobId &&
+    ifcSelectedClasses.length > 0 &&
+    busyAction === null &&
+    (
+      currentJob?.status === "READY" ||
+      currentJob?.status === "COMPLETED" ||
+      ifcQuickParse?.job.status === "READY" ||
+      Boolean(ifcAnalysis)
+    )
+  );
   const hasIfcGeometryBlockingErrors = Boolean(
     ifcAnalysis?.geometrySummary &&
+    ifcAnalysis.profile?.geometryLevel !== "NONE" &&
+    ifcImportPolicy === "STRICT_ALL_READY" &&
     ifcAnalysis.geometrySummary.missing + ifcAnalysis.geometrySummary.errors > 0
   );
+  const ifcSpatialStepReady = Boolean(
+    ifcWorkflow?.spatial.job?.status === "COMPLETED" &&
+    ((ifcWorkflow.spatial.report?.summary.rowsRejected ?? 0) === 0 || ifcImportPolicy === "IMPORT_READY_ONLY")
+  );
+  const ifcAssetReferencesReady = ifcMissingReferences.length === 0;
   const ifcSpatialByPath = useMemo(() => {
     return new Map(ifcSpatialRows.map((row) => [row.path, row]));
   }, [ifcSpatialRows]);
@@ -586,6 +829,34 @@ function ImportsPageContent() {
     }
     return map;
   }, [ifcEffectiveAssetRows]);
+  const ifcDiagnosticItems = ifcGeometryDiagnostics?.items ?? [];
+  const ifcFilteredDiagnosticItems = useMemo(() => {
+    if (ifcGeometryFilter === "ready") {
+      return ifcDiagnosticItems.filter((item) => item.importable);
+    }
+    if (ifcGeometryFilter === "to_fix") {
+      return ifcDiagnosticItems.filter((item) => !item.importable);
+    }
+    return ifcDiagnosticItems;
+  }, [ifcDiagnosticItems, ifcGeometryFilter]);
+  const ifcSpatialDiagnosticsByPath = useMemo(() => {
+    const map = new Map<string, (typeof ifcDiagnosticItems)[number]>();
+    for (const item of ifcDiagnosticItems) {
+      if (item.domain === "spatial" && item.path) {
+        map.set(item.path, item);
+      }
+    }
+    return map;
+  }, [ifcDiagnosticItems]);
+  const ifcEquipmentDiagnosticsByGlobalId = useMemo(() => {
+    const map = new Map<string, (typeof ifcDiagnosticItems)[number]>();
+    for (const item of ifcDiagnosticItems) {
+      if (item.domain === "equipment" && item.globalId) {
+        map.set(item.globalId, item);
+      }
+    }
+    return map;
+  }, [ifcDiagnosticItems]);
   const ifcEquipmentValidationRows = useMemo<Ifc4EquipmentValidationRow[]>(() => {
     const findReference = (resource: Ifc4AssetReferenceCandidate["resource"], code: string | null | undefined) =>
       code ? ifcAssetReferenceByResourceAndCode.get(assetReferenceKey(resource, code)) ?? null : null;
@@ -662,14 +933,22 @@ function ImportsPageContent() {
   const ifcVisibleSpatialRows = useMemo<Ifc4SpatialTreeRow[]>(() => {
     const expanded = new Set(ifcSpatialExpandedPaths);
     const rows: Ifc4SpatialTreeRow[] = [];
+    const matchesFilter = (node: Ifc4SpatialPreviewNode) => {
+      const diagnostic = ifcSpatialDiagnosticsByPath.get(node.path);
+      if (ifcSpatialGeometryFilter === "ready") return diagnostic?.importable ?? node.geometry?.geometryStatus === "READY";
+      if (ifcSpatialGeometryFilter === "to_fix") return diagnostic ? !diagnostic.importable : node.geometry?.geometryStatus !== "READY";
+      return true;
+    };
     const visit = (node: Ifc4SpatialPreviewNode, depth: number) => {
       const children = ifcSpatialChildrenByParentPath.get(node.path) ?? [];
       const attachedEquipments = ifcEquipmentRowsBySpatialPath.get(node.path) ?? [];
-      rows.push({
-        ...node,
-        depth,
-        hasChildren: children.length > 0 || attachedEquipments.length > 0
-      });
+      if (matchesFilter(node)) {
+        rows.push({
+          ...node,
+          depth,
+          hasChildren: children.length > 0 || attachedEquipments.length > 0
+        });
+      }
       if (!expanded.has(node.path)) {
         return;
       }
@@ -681,10 +960,22 @@ function ImportsPageContent() {
       visit(root, 0);
     }
     return rows;
-  }, [ifcEquipmentRowsBySpatialPath, ifcSpatialChildrenByParentPath, ifcSpatialExpandedPaths]);
+  }, [ifcEquipmentRowsBySpatialPath, ifcSpatialChildrenByParentPath, ifcSpatialDiagnosticsByPath, ifcSpatialExpandedPaths, ifcSpatialGeometryFilter]);
   const pagedIfcSpatialRows = paginateLocal(ifcVisibleSpatialRows, ifcSpatialPage);
   const pagedIfcAssetRows = paginateLocal(ifcEffectiveAssetRows, ifcAssetPage);
-  const pagedIfcEquipmentRows = paginateLocal(ifcEquipmentValidationRows, ifcEquipmentPage);
+  const ifcFilteredEquipmentRows = useMemo(() => {
+    if (ifcEquipmentGeometryFilter === "ready") {
+      return ifcEquipmentValidationRows.filter((row) => ifcEquipmentDiagnosticsByGlobalId.get(row.sourceGlobalId ?? "")?.importable ?? row.geometry?.geometryStatus === "READY");
+    }
+    if (ifcEquipmentGeometryFilter === "to_fix") {
+      return ifcEquipmentValidationRows.filter((row) => {
+        const diagnostic = ifcEquipmentDiagnosticsByGlobalId.get(row.sourceGlobalId ?? "");
+        return diagnostic ? !diagnostic.importable : row.geometry?.geometryStatus !== "READY";
+      });
+    }
+    return ifcEquipmentValidationRows;
+  }, [ifcEquipmentDiagnosticsByGlobalId, ifcEquipmentGeometryFilter, ifcEquipmentValidationRows]);
+  const pagedIfcEquipmentRows = paginateLocal(ifcFilteredEquipmentRows, ifcEquipmentPage);
   const pagedIfcEquipmentAnomalyRows = paginateLocal(ifcEquipmentAnomalyRows, ifcEquipmentAnomalyPage);
   const displaySettings = useMemo<OrganizationSettings | null>(() => {
     if (!spatialDisplay) {
@@ -714,6 +1005,11 @@ function ImportsPageContent() {
     const formData = new FormData();
     formData.append("file", ifcFile);
     formData.append("selectedClasses", JSON.stringify(ifcSelectedClasses));
+    formData.append("selectedProperties", JSON.stringify(Object.values(ifcEquipmentPropertyMappings).filter((value): value is string => Boolean(value && value !== NONE_VALUE))));
+    formData.append("maxProducts", ifcMaxProducts);
+    formData.append("geometryLevel", ifcGeometryLevel);
+    formData.append("maxShapeParts", ifcMaxShapeParts);
+    formData.append("importPolicy", ifcImportPolicy);
     formData.append("defaultStatusCode", ifcDefaultStatusCode);
     formData.append("defaultOwnerEntityCode", ifcDefaultOwnerCode);
     formData.append(
@@ -722,6 +1018,11 @@ function ImportsPageContent() {
         selectedClasses: ifcSelectedClasses,
         defaultStatusCode: ifcDefaultStatusCode,
         defaultOwnerEntityCode: ifcDefaultOwnerCode,
+        maxProducts: ifcMaxProducts,
+        geometryLevel: ifcGeometryLevel,
+        maxShapeParts: ifcMaxShapeParts,
+        importPolicy: ifcImportPolicy,
+        selectedProperties: Object.values(ifcEquipmentPropertyMappings).filter((value): value is string => Boolean(value && value !== NONE_VALUE)),
         propertyMappings: ifcEquipmentPropertyMappings
       })
     );
@@ -754,6 +1055,59 @@ function ImportsPageContent() {
     ifcDefaultStatusCode,
     ifcEquipmentPropertyMappings,
     ifcFile,
+    ifcGeometryLevel,
+    ifcImportPolicy,
+    ifcMaxProducts,
+    ifcMaxShapeParts,
+    ifcSelectedClasses,
+    ifcSpatialTypeOverrides
+  ]);
+
+  const buildIfcOptionsBody = useCallback(() => ({
+    selectedClasses: JSON.stringify(ifcSelectedClasses),
+    selectedProperties: JSON.stringify(Object.values(ifcEquipmentPropertyMappings).filter((value): value is string => Boolean(value && value !== NONE_VALUE))),
+    maxProducts: ifcMaxProducts,
+    geometryLevel: ifcGeometryLevel,
+    maxShapeParts: ifcMaxShapeParts,
+    importPolicy: ifcImportPolicy,
+    defaultStatusCode: ifcDefaultStatusCode,
+    defaultOwnerEntityCode: ifcDefaultOwnerCode,
+    equipmentOptions: JSON.stringify({
+      selectedClasses: ifcSelectedClasses,
+      defaultStatusCode: ifcDefaultStatusCode,
+      defaultOwnerEntityCode: ifcDefaultOwnerCode,
+      maxProducts: ifcMaxProducts,
+      geometryLevel: ifcGeometryLevel,
+      maxShapeParts: ifcMaxShapeParts,
+      importPolicy: ifcImportPolicy,
+      selectedProperties: Object.values(ifcEquipmentPropertyMappings).filter((value): value is string => Boolean(value && value !== NONE_VALUE)),
+      propertyMappings: ifcEquipmentPropertyMappings
+    }),
+    spatialOverrides: JSON.stringify(
+      Object.entries(ifcSpatialTypeOverrides).map(([path, type]) => ({
+        path,
+        type
+      }))
+    ),
+    assetReferenceOverrides: JSON.stringify(
+      Object.entries(ifcAssetResourceOverrides).map(([key, nextResource]) => {
+        const [resource, ...codeChunks] = key.split(":");
+        return {
+          resource,
+          code: codeChunks.join(":"),
+          nextResource
+        };
+      })
+    )
+  }), [
+    ifcAssetResourceOverrides,
+    ifcDefaultOwnerCode,
+    ifcDefaultStatusCode,
+    ifcEquipmentPropertyMappings,
+    ifcGeometryLevel,
+    ifcImportPolicy,
+    ifcMaxProducts,
+    ifcMaxShapeParts,
     ifcSelectedClasses,
     ifcSpatialTypeOverrides
   ]);
@@ -792,6 +1146,89 @@ function ImportsPageContent() {
     [currentDomain, currentJob?.mappings, fieldCatalog]
   );
 
+  const buildIfcAssistantProfilePayload = useCallback(() => ({
+    name: ifcAssistantProfileName.trim() || `Profil IFC4 ${new Date().toLocaleDateString("fr-FR")}`,
+    description: null,
+    selectedClasses: ifcSelectedClasses,
+    selectedProperties: Object.values(ifcEquipmentPropertyMappings).filter((value): value is string => Boolean(value && value !== NONE_VALUE)),
+    spatialMappings: null,
+    equipmentMappings: ifcEquipmentPropertyMappings,
+    assetReferenceOverrides: Object.entries(ifcAssetResourceOverrides).map(([key, nextResource]) => {
+      const [resource, ...codeChunks] = key.split(":");
+      return {
+        resource,
+        code: codeChunks.join(":"),
+        nextResource
+      };
+    }),
+    spatialTypeOverrides: Object.entries(ifcSpatialTypeOverrides).map(([path, type]) => ({ path, type })),
+    geometryLevel: ifcGeometryLevel,
+    maxProducts: Number.parseInt(ifcMaxProducts, 10) || 5000,
+    maxShapeParts: Number.parseInt(ifcMaxShapeParts, 10) || 12,
+    importPolicy: ifcImportPolicy,
+    isDefault: false
+  }), [
+    ifcAssetResourceOverrides,
+    ifcAssistantProfileName,
+    ifcEquipmentPropertyMappings,
+    ifcGeometryLevel,
+    ifcImportPolicy,
+    ifcMaxProducts,
+    ifcMaxShapeParts,
+    ifcSelectedClasses,
+    ifcSpatialTypeOverrides
+  ]);
+
+  const refreshIfcAssistantProfiles = useCallback(async () => {
+    const profiles = await apiFetch<Ifc4AssistantProfileSummary[]>("/imports/ifc4/profiles");
+    setIfcAssistantProfiles(profiles);
+    return profiles;
+  }, []);
+
+  const applyIfcAssistantProfile = useCallback(async (profileId: string) => {
+    if (profileId === "none") {
+      setSelectedIfcAssistantProfileId("none");
+      return;
+    }
+    const profile = await apiFetch<Ifc4AssistantProfileDetail>(`/imports/ifc4/profiles/${profileId}`);
+    setSelectedIfcAssistantProfileId(profile.id);
+    setIfcAssistantProfileName(profile.name);
+    setIfcSelectedClasses(profile.selectedClasses.length > 0 ? profile.selectedClasses : ["IFCFURNITURE"]);
+    setIfcEquipmentPropertyMappings(profile.equipmentMappings ?? DEFAULT_IFC_EQUIPMENT_PROPERTY_MAPPINGS);
+    setIfcGeometryLevel(profile.geometryLevel);
+    setIfcMaxProducts(String(profile.maxProducts));
+    setIfcMaxShapeParts(String(profile.maxShapeParts));
+    setIfcImportPolicy(profile.importPolicy);
+    setIfcSpatialTypeOverrides(Object.fromEntries(profile.spatialTypeOverrides.map((item) => [item.path, item.type as SpatialNodeType])));
+    setIfcAssetResourceOverrides(Object.fromEntries(profile.assetReferenceOverrides.map((item) => [`${item.resource}:${item.code}`, item.nextResource])));
+    setActionNotice(`Profil IFC4 applique : ${profile.name}`);
+  }, []);
+
+  const saveIfcAssistantProfile = useCallback(async (mode: "create" | "update") => {
+    setBusyAction(mode === "create" ? "ifc-profile-create" : "ifc-profile-update");
+    setActionError(null);
+    try {
+      const payload = buildIfcAssistantProfilePayload();
+      const profile = mode === "create" || selectedIfcAssistantProfileId === "none"
+        ? await apiFetch<Ifc4AssistantProfileDetail>("/imports/ifc4/profiles", {
+            method: "POST",
+            body: JSON.stringify(payload)
+          })
+        : await apiFetch<Ifc4AssistantProfileDetail>(`/imports/ifc4/profiles/${selectedIfcAssistantProfileId}`, {
+            method: "PATCH",
+            body: JSON.stringify(payload)
+          });
+      setSelectedIfcAssistantProfileId(profile.id);
+      setIfcAssistantProfileName(profile.name);
+      await refreshIfcAssistantProfiles();
+      setActionNotice(`Profil IFC4 enregistre : ${profile.name}`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Impossible d enregistrer le profil IFC4");
+    } finally {
+      setBusyAction(null);
+    }
+  }, [buildIfcAssistantProfilePayload, refreshIfcAssistantProfiles, selectedIfcAssistantProfileId]);
+
   const loadJobs = useCallback(async () => {
     return apiFetch<PaginatedResponse<ImportJobSummary>>(
       `/imports/jobs${buildQueryString({
@@ -829,7 +1266,7 @@ function ImportsPageContent() {
       return;
     }
 
-    const [jobs, profiles, fields] = await Promise.all([
+    const [jobs, profiles, fields, ifcProfiles] = await Promise.all([
       loadJobs(),
       apiFetch<PaginatedResponse<ImportProfileSummary>>(
         `/imports/profiles${buildQueryString({
@@ -841,11 +1278,13 @@ function ImportsPageContent() {
           direction: "desc"
         })}`
       ),
-      apiFetch<ImportTargetFieldDefinition[]>(`/imports/targets/${currentDomain}/fields`)
+      apiFetch<ImportTargetFieldDefinition[]>(`/imports/targets/${currentDomain}/fields`),
+      apiFetch<Ifc4AssistantProfileSummary[]>("/imports/ifc4/profiles")
     ]);
 
     setJobsResponse(jobs);
     setProfilesResponse(profiles);
+    setIfcAssistantProfiles(ifcProfiles);
     setFieldCatalog(fields);
     try {
       setSpatialDisplay(await apiFetch<OrganizationSpatialDisplaySettings>("/spatial/nodes/display-settings"));
@@ -871,19 +1310,109 @@ function ImportsPageContent() {
     }
   }, [refreshWorkspace]);
 
+  const applyIfcAnalysisToState = useCallback((analysis: Ifc4AnalysisResponse) => {
+    setIfcAnalysis(analysis);
+    setIfcQuickParse(null);
+    setIfcGeometryDiagnostics(null);
+    const defaults = analysis.classSummary
+      .filter((item) => item.selectedByDefault)
+      .map((item) => item.sourceClass);
+    if (defaults.length > 0) {
+      setIfcSelectedClasses(defaults);
+    }
+    setIfcSpatialTypeOverrides({});
+    const knownPaths = new Set(analysis.spatialNodes.map((node) => node.path));
+    setIfcSpatialExpandedPaths(
+      analysis.spatialNodes
+        .filter((node) => !node.parentPath || !knownPaths.has(node.parentPath))
+        .map((node) => node.path)
+    );
+    setIfcSelectedSpatialPath(null);
+    setIfcAssetResourceOverrides({});
+    setIfcSpatialPage(1);
+    setIfcAssetPage(1);
+    setIfcEquipmentPage(1);
+    setIfcEquipmentAnomalyPage(1);
+    setSelectedIfcEquipment(null);
+  }, []);
+
+  const applyIfcQuickParseToState = useCallback((quickParse: Ifc4QuickParseResponse) => {
+    setIfcQuickParse(quickParse);
+    setIfcAnalysis(null);
+    setIfcGeometryDiagnostics(null);
+    setIfcAnalysisJobId(quickParse.job.id);
+    setCurrentJob(quickParse.job);
+    const defaults = quickParse.classSummary
+      .filter((item) => item.selectedByDefault)
+      .map((item) => item.sourceClass);
+    if (defaults.length > 0) {
+      setIfcSelectedClasses(defaults);
+    }
+    setIfcSpatialTypeOverrides({});
+    setIfcSpatialExpandedPaths([]);
+    setIfcSelectedSpatialPath(null);
+    setIfcAssetResourceOverrides({});
+    setIfcSpatialPage(1);
+    setIfcAssetPage(1);
+    setIfcEquipmentPage(1);
+    setIfcEquipmentAnomalyPage(1);
+    setSelectedIfcEquipment(null);
+  }, []);
+
+  const loadIfcJobLogs = useCallback(async (jobId: string) => {
+    const logs = await apiFetch<ImportJobLogEntry[]>(`/imports/jobs/${jobId}/logs`);
+    setIfcJobLogs(logs);
+    return logs;
+  }, []);
+
+  const loadIfcGeometryDiagnostics = useCallback(async (jobId: string) => {
+    const diagnostics = await apiFetch<Ifc4GeometryDiagnosticsResponse>(`/imports/ifc4/analyze-jobs/${jobId}/geometry-diagnostics`);
+    setIfcGeometryDiagnostics(diagnostics);
+    return diagnostics;
+  }, []);
+
+  const applyIfcWorkflowToState = useCallback(
+    (workflow: Ifc4WorkflowResponse) => {
+      setIfcWorkflow(workflow);
+      setCurrentJob(workflow.analysisJob);
+      setIfcAnalysisJobId(workflow.analysisJob.id);
+      setIfcJobLogs(workflow.analysisLogs);
+      setIfcApplyResult(workflow.assetReferences.lastApplyResult);
+      if (workflow.analysis) {
+        applyIfcAnalysisToState(workflow.analysis);
+      } else if (workflow.quickParse) {
+        applyIfcQuickParseToState(workflow.quickParse);
+      }
+    },
+    [applyIfcAnalysisToState, applyIfcQuickParseToState]
+  );
+
+  const loadIfcWorkflow = useCallback(
+    async (jobId: string) => {
+      const workflow = await apiFetch<Ifc4WorkflowResponse>(`/imports/ifc4/analyze-jobs/${jobId}/workflow`);
+      applyIfcWorkflowToState(workflow);
+      return workflow;
+    },
+    [applyIfcWorkflowToState]
+  );
+
   const openJob = useCallback(
     async (jobId: string) => {
       const job = await apiFetch<ImportJobDetail>(`/imports/jobs/${jobId}`);
-      const fields =
-        currentDomain === job.targetDomain && fieldCatalog.length > 0
+      const isExecutableJob = EXECUTABLE_DOMAINS.has(job.targetDomain);
+      const fields = isExecutableJob
+        ? currentDomain === job.targetDomain && fieldCatalog.length > 0
           ? fieldCatalog
-          : await apiFetch<ImportTargetFieldDefinition[]>(`/imports/targets/${job.targetDomain}/fields`);
+          : await apiFetch<ImportTargetFieldDefinition[]>(`/imports/targets/${job.targetDomain}/fields`)
+        : [];
       setCurrentJob(job);
       setPageError(null);
       setActionError(null);
       setActionNotice(null);
       setPurgeBlocked([]);
-      setCurrentDomain(job.targetDomain);
+      if (isExecutableJob) {
+        setCurrentDomain(job.targetDomain);
+      }
       setFieldCatalog(fields);
       setMappingDrafts(mergeDrafts(fields, job.mappings));
       if (job.profileId) {
@@ -898,8 +1427,12 @@ function ImportsPageContent() {
         setSelectedProfile(null);
         setSelectedProfileId("none");
       }
+      if (job.targetDomain === "ifc4-analysis") {
+        setIfcAnalysisJobId(job.id);
+        await loadIfcWorkflow(job.id);
+      }
     },
-    [currentDomain, fieldCatalog, loadProfileDetail]
+    [currentDomain, fieldCatalog, loadIfcWorkflow, loadProfileDetail]
   );
 
   useEffect(() => {
@@ -986,79 +1519,198 @@ function ImportsPageContent() {
     }
   }, [currentJob?.id, pathname, router, searchParams, selectedProfile?.id, urlSelectionReady]);
 
-  const analyzeIfc4 = useCallback(async () => {
-    setBusyAction("ifc-analyze");
+  const quickParseIfc4 = useCallback(async () => {
+    setBusyAction("ifc-quick-parse");
     setActionError(null);
     setActionNotice(null);
     setIfcApplyResult(null);
+    setIfcAnalysis(null);
+    setIfcQuickParse(null);
+    setIfcWorkflow(null);
+    setIfcJobLogs([]);
     try {
-      const analysis = await apiUpload<Ifc4AnalysisResponse>("/imports/ifc4/analyze", buildIfcFormData());
-      setIfcAnalysis(analysis);
-      const defaults = analysis.classSummary
-        .filter((item) => item.selectedByDefault)
-        .map((item) => item.sourceClass);
-      if (defaults.length > 0) {
-        setIfcSelectedClasses(defaults);
-      }
-      setIfcSpatialTypeOverrides({});
-      const knownPaths = new Set(analysis.spatialNodes.map((node) => node.path));
-      setIfcSpatialExpandedPaths(
-        analysis.spatialNodes
-          .filter((node) => !node.parentPath || !knownPaths.has(node.parentPath))
-          .map((node) => node.path)
-      );
-      setIfcSelectedSpatialPath(null);
-      setIfcAssetResourceOverrides({});
-      setIfcSpatialPage(1);
-      setIfcAssetPage(1);
-      setIfcEquipmentPage(1);
-      setIfcEquipmentAnomalyPage(1);
-      setSelectedIfcEquipment(null);
+      const result = await apiUpload<Ifc4QuickParseResponse>("/imports/ifc4/analyze-jobs/quick-parse", buildIfcFormData());
+      applyIfcQuickParseToState(result);
+      await loadIfcWorkflow(result.job.id);
+      const jobs = await loadJobs();
+      setJobsResponse(jobs);
       setPageError(null);
-      setActionNotice(
-        `Analyse IFC4 terminee : ${analysis.spatialNodes.length} noeud(s) spatial(aux), ${analysis.equipmentRows.length} equipement(s) candidat(s).`
-      );
+      setActionNotice("Classes IFC detectees. Selectionne les classes a previsualiser puis lance la previsualisation IFC4.");
     } catch (error) {
-      setActionError(formatDetailedApiError(error, "Impossible d analyser le fichier IFC4"));
+      setActionError(formatDetailedApiError(error, "Impossible de parser les classes IFC4"));
     } finally {
       setBusyAction(null);
     }
-  }, [buildIfcFormData]);
+  }, [applyIfcQuickParseToState, buildIfcFormData, loadIfcWorkflow, loadJobs]);
 
-  const createIfc4Job = useCallback(
-    async (kind: "spatial" | "equipments") => {
-      setBusyAction(kind === "spatial" ? "ifc-spatial-job" : "ifc-equipments-job");
+  const startIfc4Analysis = useCallback(async () => {
+    if (!ifcAnalysisJobId) {
+      setActionError("Lance d abord le parse rapide IFC4");
+      return;
+    }
+    setBusyAction("ifc-analyze");
+    setActionError(null);
+    setActionNotice(null);
+    setIfcAnalysis(null);
+    try {
+      const result = await apiFetch<Ifc4AnalyzeJobResponse>(`/imports/ifc4/analyze-jobs/${ifcAnalysisJobId}/start`, {
+        method: "POST",
+        body: JSON.stringify(buildIfcOptionsBody())
+      });
+      setCurrentJob(result.job);
+      await loadIfcWorkflow(result.job.id);
+      const jobs = await loadJobs();
+      setJobsResponse(jobs);
+      setPageError(null);
+      setActionNotice("Previsualisation IFC4 lancee. Les logs du worker se mettent a jour automatiquement.");
+    } catch (error) {
+      setActionError(formatDetailedApiError(error, "Impossible de lancer la previsualisation IFC4"));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [buildIfcOptionsBody, ifcAnalysisJobId, loadIfcWorkflow, loadJobs]);
+
+  const cancelIfc4Analysis = useCallback(async () => {
+    if (!ifcAnalysisJobId || currentJob?.status !== "RUNNING") {
+      return;
+    }
+    if (!window.confirm("Arreter le traitement IFC4 en cours ?")) {
+      return;
+    }
+    setBusyAction("ifc-cancel");
+    setActionError(null);
+    try {
+      const result = await apiFetch<Ifc4CancelJobResponse>(`/imports/ifc4/analyze-jobs/${ifcAnalysisJobId}/cancel`, {
+        method: "POST"
+      });
+      setCurrentJob(result.job);
+      await loadIfcWorkflow(result.job.id);
+      const jobs = await loadJobs();
+      setJobsResponse(jobs);
+      setActionNotice("Analyse IFC4 annulee par l utilisateur.");
+    } catch (error) {
+      setActionError(formatDetailedApiError(error, "Impossible d annuler l analyse IFC4"));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [currentJob?.status, ifcAnalysisJobId, loadIfcWorkflow, loadJobs]);
+
+  const runIfc4WorkflowAction = useCallback(
+    async (domain: Ifc4WorkflowChildDomain, action: Ifc4WorkflowAction) => {
+      setBusyAction(`ifc-${domain}-${action}`);
       setActionError(null);
       try {
-        const result = await apiUpload<Ifc4CreateJobResponse>(
-          kind === "spatial" ? "/imports/ifc4/spatial/create-job" : "/imports/ifc4/equipments/create-job",
-          buildIfcFormData()
+        if (!ifcAnalysisJobId) {
+          throw new Error("Lance et termine d abord une analyse IFC4");
+        }
+        if (action === "cancel" && !window.confirm("Annuler ce traitement IFC4 ?")) {
+          return;
+        }
+        const result = await apiFetch<Ifc4WorkflowActionResponse>(
+          `/imports/ifc4/analyze-jobs/${ifcAnalysisJobId}/${domain}/${action}`,
+          {
+            method: "POST",
+            body: action === "cancel" ? undefined : JSON.stringify(buildIfcOptionsBody())
+          }
         );
-        await openJob(result.job.id);
+        applyIfcWorkflowToState(result.workflow);
         const jobs = await loadJobs();
         setJobsResponse(jobs);
         setPageError(null);
-        setActionNotice(`Job ${TARGET_DOMAIN_LABELS[result.job.targetDomain]} prepare avec ${result.rowsPrepared} ligne(s).`);
+        const label = domain === "spatial" ? "spatial" : "equipements";
+        setActionNotice(`Action ${action} ${label} terminee.`);
       } catch (error) {
-        setActionError(formatDetailedApiError(error, "Impossible de creer le job depuis IFC4"));
+        setActionError(formatDetailedApiError(error, "Impossible d executer l action IFC4"));
       } finally {
         setBusyAction(null);
       }
     },
-    [buildIfcFormData, loadJobs, openJob]
+    [applyIfcWorkflowToState, buildIfcOptionsBody, ifcAnalysisJobId, loadJobs]
   );
+
+  useEffect(() => {
+    if (!ifcAnalysisJobId || currentJob?.status !== "RUNNING") {
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const [job] = await Promise.all([
+          apiFetch<ImportJobDetail>(`/imports/jobs/${ifcAnalysisJobId}`),
+          loadIfcJobLogs(ifcAnalysisJobId)
+        ]);
+        if (cancelled) {
+          return;
+        }
+        setCurrentJob(job);
+        if (job.status === "COMPLETED") {
+          const workflow = await loadIfcWorkflow(ifcAnalysisJobId);
+          const analysis = workflow.analysis;
+          if (!cancelled) {
+            if (analysis) {
+              applyIfcAnalysisToState(analysis);
+            }
+            setActionNotice(
+              analysis
+                ? `Analyse IFC4 terminee : ${analysis.spatialNodes.length} noeud(s) spatial(aux), ${analysis.equipmentRows.length} equipement(s) candidat(s).`
+                : "Analyse IFC4 terminee."
+            );
+          }
+          return;
+        }
+        if (job.status === "FAILED") {
+          setActionError("L analyse IFC4 a echoue. Consulte les logs du worker pour le detail.");
+          return;
+        }
+        if (job.status === "CANCELLED") {
+          setActionNotice("Analyse IFC4 annulee par l utilisateur.");
+          return;
+        }
+        if (job.status === "READY") {
+          const workflow = await loadIfcWorkflow(ifcAnalysisJobId);
+          const quickParse = workflow.quickParse;
+          if (!cancelled) {
+            if (quickParse) {
+              applyIfcQuickParseToState(quickParse);
+            }
+          }
+          return;
+        }
+        timer = setTimeout(poll, 3000);
+      } catch (error) {
+        if (!cancelled) {
+          setActionError(formatDetailedApiError(error, "Impossible de suivre le job d analyse IFC4"));
+        }
+      }
+    };
+
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [applyIfcAnalysisToState, applyIfcQuickParseToState, currentJob?.status, ifcAnalysisJobId, loadIfcJobLogs, loadIfcWorkflow]);
 
   const applyIfc4References = useCallback(async () => {
     setBusyAction("ifc-apply-references");
     setActionError(null);
     try {
-      const result = await apiUpload<Ifc4AssetReferencesApplyResult>(
-        "/imports/ifc4/asset-references/apply",
-        buildIfcFormData()
+      if (!ifcAnalysisJobId) {
+        throw new Error("Lance et termine d abord une analyse IFC4");
+      }
+      const result = await apiFetch<Ifc4AssetReferencesApplyResult>(
+        `/imports/ifc4/analyze-jobs/${ifcAnalysisJobId}/asset-references/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify(buildIfcOptionsBody())
+        }
       );
       setIfcApplyResult(result);
-      const analysis = await apiUpload<Ifc4AnalysisResponse>("/imports/ifc4/analyze", buildIfcFormData());
-      setIfcAnalysis(analysis);
+      await loadIfcWorkflow(ifcAnalysisJobId);
       setPageError(null);
       setActionNotice(`${result.created.length} reference(s) creee(s), ${result.existing.length} deja existante(s).`);
     } catch (error) {
@@ -1066,7 +1718,7 @@ function ImportsPageContent() {
     } finally {
       setBusyAction(null);
     }
-  }, [buildIfcFormData]);
+  }, [buildIfcOptionsBody, ifcAnalysisJobId, loadIfcWorkflow]);
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(ifcVisibleSpatialRows.length / IFC_PREVIEW_PAGE_SIZE));
@@ -1079,14 +1731,23 @@ function ImportsPageContent() {
   }, [ifcEffectiveAssetRows.length]);
 
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(ifcEquipmentValidationRows.length / IFC_PREVIEW_PAGE_SIZE));
+    const totalPages = Math.max(1, Math.ceil(ifcFilteredEquipmentRows.length / IFC_PREVIEW_PAGE_SIZE));
     setIfcEquipmentPage((current) => Math.min(current, totalPages));
-  }, [ifcEquipmentValidationRows.length]);
+  }, [ifcFilteredEquipmentRows.length]);
 
   useEffect(() => {
     const totalPages = Math.max(1, Math.ceil(ifcEquipmentAnomalyRows.length / IFC_PREVIEW_PAGE_SIZE));
     setIfcEquipmentAnomalyPage((current) => Math.min(current, totalPages));
   }, [ifcEquipmentAnomalyRows.length]);
+
+  useEffect(() => {
+    if (!ifcAnalysisJobId || !ifcAnalysis) {
+      return;
+    }
+    void loadIfcGeometryDiagnostics(ifcAnalysisJobId).catch(() => {
+      setIfcGeometryDiagnostics(null);
+    });
+  }, [ifcAnalysis, ifcAnalysisJobId, loadIfcGeometryDiagnostics]);
 
   useEffect(() => {
     if (!token) {
@@ -1318,6 +1979,88 @@ function ImportsPageContent() {
     }
   };
 
+  const toggleIfcClassSelection = (classes: string[], checked: boolean) => {
+    setIfcSelectedClasses((current) => {
+      if (checked) {
+        return [...new Set([...current, ...classes])];
+      }
+      const toRemove = new Set(classes);
+      return current.filter((sourceClass) => !toRemove.has(sourceClass));
+    });
+  };
+
+  const renderIfcClassNode = (node: IfcClassTreeNode, depth = 0): ReactNode => {
+    const classes = collectIfcClasses(node);
+    const checkedCount = classes.filter((sourceClass) => ifcSelectedClasses.includes(sourceClass)).length;
+    const isChecked = classes.length > 0 && checkedCount === classes.length;
+    const isPartiallyChecked = checkedCount > 0 && checkedCount < classes.length;
+    const isLeaf = Boolean(node.sourceClass);
+    const isExpanded = ifcExpandedClassGroups.includes(node.id);
+
+    if (isLeaf) {
+      return (
+        <label
+          key={node.id}
+          className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-sm"
+          style={{ marginLeft: `${depth * 18}px` }}
+        >
+          <span className="min-w-0">
+            <span className="font-mono text-xs font-semibold text-foreground">{node.label}</span>
+            <span className="ml-2 text-muted-foreground">{formatNumber(node.count)}</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={isChecked}
+            onChange={(event) => toggleIfcClassSelection(classes, event.target.checked)}
+          />
+        </label>
+      );
+    }
+
+    return (
+      <div key={node.id} className="space-y-2">
+        <div
+          className="flex items-center gap-3 rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-sm"
+          style={{ marginLeft: `${depth * 18}px` }}
+        >
+          <button
+            type="button"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            onClick={() =>
+              setIfcExpandedClassGroups((current) =>
+                current.includes(node.id)
+                  ? current.filter((item) => item !== node.id)
+                  : [...current, node.id]
+              )
+            }
+            aria-label={isExpanded ? "Replier le groupe IFC" : "Deployer le groupe IFC"}
+          >
+            {isExpanded ? <ChevronDownIcon className="size-4" /> : <ChevronRightIcon className="size-4" />}
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-foreground">{node.label}</p>
+            <p className="text-xs text-muted-foreground">
+              {formatNumber(classes.length)} classe(s), {formatNumber(node.count)} occurrence(s)
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{isPartiallyChecked ? "Partiel" : isChecked ? "Selectionne" : "Selectionner"}</span>
+            <input
+              type="checkbox"
+              checked={isChecked}
+              onChange={(event) => toggleIfcClassSelection(classes, event.target.checked)}
+            />
+          </label>
+        </div>
+        {isExpanded ? (
+          <div className="space-y-2">
+            {(node.children ?? []).map((child) => renderIfcClassNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   if (!token) {
     return <WebAuthScreen />;
   }
@@ -1459,7 +2202,7 @@ function ImportsPageContent() {
               </PageSection>
             ) : null}
             {hasImportsRead ? (
-              <div className="grid gap-6 2xl:grid-cols-[minmax(0,1.25fr)_430px]">
+              <div className="space-y-6">
                 <div className="space-y-6">
                   <PageSection
                     title="Assistant IFC4"
@@ -1485,6 +2228,11 @@ function ImportsPageContent() {
                                 onClick={() => {
                                   setIfcFile(null);
                                   setIfcAnalysis(null);
+                                  setIfcQuickParse(null);
+                                  setIfcGeometryDiagnostics(null);
+                                  setIfcAnalysisJobId(null);
+                                  setIfcWorkflow(null);
+                                  setIfcJobLogs([]);
                                   setIfcApplyResult(null);
                                   setIfcSpatialTypeOverrides({});
                                   setIfcSpatialExpandedPaths([]);
@@ -1516,6 +2264,11 @@ function ImportsPageContent() {
                               const file = event.target.files?.[0] ?? null;
                               setIfcFile(file);
                               setIfcAnalysis(null);
+                              setIfcQuickParse(null);
+                              setIfcGeometryDiagnostics(null);
+                              setIfcAnalysisJobId(null);
+                              setIfcWorkflow(null);
+                              setIfcJobLogs([]);
                               setIfcApplyResult(null);
                               setIfcSpatialTypeOverrides({});
                               setIfcSpatialExpandedPaths([]);
@@ -1535,15 +2288,149 @@ function ImportsPageContent() {
                         </div>
                       </FormSection>
 
-                      <FormSection title="2. Previsualisation" description="Analyse du fichier avant creation des jobs imports." className="p-4" columns={1}>
+                      <FormSection title="2. Profil d import IFC4" description="Limites et niveau de geometrie avant lancement." className="p-4" columns={1}>
                         <div className="flex flex-wrap items-center gap-3">
                           <Button
                             disabled={!hasImportsManage || !ifcFile || busyAction !== null}
-                            onClick={() => void analyzeIfc4()}
+                            onClick={() => void quickParseIfc4()}
                           >
                             <EyeIcon className="size-4" />
-                            Previsualiser
+                            Parser les classes IFC
                           </Button>
+                          {ifcQuickParse ? (
+                            <div className="flex flex-wrap gap-2">
+                              <Badge variant="outline">{ifcQuickParse.schema ?? "IFC"}</Badge>
+                              <Badge variant="outline">{formatNumber(ifcQuickParse.metadataSummary.totalEntities)} entite(s)</Badge>
+                              <Badge variant="outline">{formatNumber(ifcQuickParse.classSummary.length)} classe(s)</Badge>
+                              <Badge variant="outline">{formatNumber(ifcQuickParse.metadataSummary.candidateProducts)} candidat(s)</Badge>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/10 p-4 lg:grid-cols-[1fr_1fr_auto_auto]">
+                          <Field label="Profil IFC4 sauvegarde">
+                            <Select value={selectedIfcAssistantProfileId} onValueChange={(value) => void applyIfcAssistantProfile(value ?? "none")}>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Aucun profil IFC4" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Aucun profil IFC4</SelectItem>
+                                {ifcAssistantProfiles.map((profile) => (
+                                  <SelectItem key={profile.id} value={profile.id}>
+                                    {profile.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Field label="Nom du profil">
+                            <Input
+                              value={ifcAssistantProfileName}
+                              onChange={(event) => setIfcAssistantProfileName(event.target.value)}
+                              placeholder="Profil mobilier Archicad"
+                            />
+                          </Field>
+                          <div className="flex items-end">
+                            <Button
+                              variant="outline"
+                              disabled={!hasImportsManage || busyAction !== null}
+                              onClick={() => void saveIfcAssistantProfile("create")}
+                            >
+                              <SaveIcon className="size-4" />
+                              Enregistrer
+                            </Button>
+                          </div>
+                          <div className="flex items-end">
+                            <Button
+                              variant="outline"
+                              disabled={!hasImportsManage || !selectedIfcAssistantProfile || busyAction !== null}
+                              onClick={() => void saveIfcAssistantProfile("update")}
+                            >
+                              <SaveIcon className="size-4" />
+                              Mettre a jour
+                            </Button>
+                          </div>
+                          <p className="text-sm text-muted-foreground lg:col-span-4">
+                            Le profil IFC4 sauvegarde les classes, proprietes, mappings equipements, overrides spatial/referentiels et politique d import.
+                          </p>
+                        </div>
+                        <Field label="Classes IFC a analyser">
+                          {ifcClassSelectionItems.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                              Lance le parse rapide pour afficher les classes IFC detectees.
+                            </div>
+                          ) : (
+                            <div className="max-h-96 space-y-2 overflow-auto rounded-xl border border-border/60 bg-background/70 p-3">
+                              {ifcClassTree.map((node) => renderIfcClassNode(node))}
+                            </div>
+                          )}
+                        </Field>
+                        <div className="grid gap-4 lg:grid-cols-4">
+                          <Field label="Nombre maximum de produits">
+                            <Input
+                              min={1}
+                              type="number"
+                              value={ifcMaxProducts}
+                              onChange={(event) => setIfcMaxProducts(event.target.value)}
+                            />
+                          </Field>
+                          <Field label="Niveau de geometrie">
+                            <Select value={ifcGeometryLevel} onValueChange={(value) => setIfcGeometryLevel(value as Ifc4GeometryLevel)}>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="NONE">Aucun</SelectItem>
+                                <SelectItem value="MINIMUM">Minimum - boites exterieures</SelectItem>
+                                <SelectItem value="INTERMEDIATE">Intermediaire - sous-boites simplifiees</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Field label="Details intermediaires max">
+                            <Input
+                              min={1}
+                              max={64}
+                              type="number"
+                              disabled={ifcGeometryLevel !== "INTERMEDIATE"}
+                              value={ifcMaxShapeParts}
+                              onChange={(event) => setIfcMaxShapeParts(event.target.value)}
+                            />
+                          </Field>
+                          <Field label="Politique d import">
+                            <Select value={ifcImportPolicy} onValueChange={(value) => setIfcImportPolicy(value as Ifc4ImportPolicy)}>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="STRICT_ALL_READY">Strict - tout doit etre OK</SelectItem>
+                                <SelectItem value="IMPORT_READY_ONLY">Importer uniquement les lignes OK</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                        </div>
+                        <p className="mt-3 text-sm text-muted-foreground">
+                          Les classes et proprietes selectionnees plus bas sont reutilisees lors du recalcul. Le filtrage des classes est applique avant extraction geometrique.
+                        </p>
+                      </FormSection>
+
+                      <FormSection title="3. Previsualisation" description="Analyse du fichier avant creation des jobs imports." className="p-4" columns={1}>
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Button
+                            disabled={!canStartIfcPreview}
+                            onClick={() => void startIfc4Analysis()}
+                          >
+                            <PlayIcon className="size-4" />
+                            Lancer la previsualisation IFC4
+                          </Button>
+                          {ifcAnalysisJobId ? (
+                            <Button
+                              variant="outline"
+                              disabled={busyAction !== null}
+                              onClick={() => void loadIfcJobLogs(ifcAnalysisJobId)}
+                            >
+                              <RefreshCwIcon className="size-4" />
+                              Rafraichir les logs
+                            </Button>
+                          ) : null}
                           {ifcAnalysis ? (
                             <div className="flex flex-wrap gap-2">
                               <Badge variant="outline">{ifcAnalysis.schema ?? "IFC"}</Badge>
@@ -1560,14 +2447,123 @@ function ImportsPageContent() {
                               ) : null}
                             </div>
                           ) : (
-                            <span className="text-sm text-muted-foreground">La previsualisation apparaitra apres analyse.</span>
+                            <span className="text-sm text-muted-foreground">Le parse rapide affichera les classes IFC avant previsualisation.</span>
                           )}
                         </div>
+                        {ifcAnalysisJobId ? (
+                          <div className="mt-4 rounded-2xl border border-border/60 bg-background/80 p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="font-semibold text-foreground">Logs du worker IFC4</p>
+                                <p className="text-sm text-muted-foreground">Suivi persistant de l analyse du fichier.</p>
+                              </div>
+                              {currentJob?.status ? (
+                                <StatusPill
+                                  label={currentJob.status}
+                                  onClick={currentJob.status === "RUNNING" ? () => void cancelIfc4Analysis() : undefined}
+                                  title={currentJob.status === "RUNNING" ? "Arreter le traitement IFC4 en cours" : undefined}
+                                />
+                              ) : null}
+                            </div>
+                            <div className="mt-3 max-h-72 space-y-2 overflow-auto rounded-xl border border-border/50 bg-muted/20 p-3 font-mono text-xs">
+                              {ifcJobLogs.length === 0 ? (
+                                <p className="text-muted-foreground">Aucun log disponible pour le moment.</p>
+                              ) : (
+                                ifcJobLogs.map((log) => (
+                                  <div key={log.id} className={log.level === "ERROR" ? "text-red-600" : log.level === "WARNING" ? "text-amber-700" : "text-foreground"}>
+                                    <span className="text-muted-foreground">{new Date(log.createdAt).toLocaleTimeString("fr-FR")}</span>
+                                    <span className="mx-2 rounded-full border border-border/60 px-2 py-0.5">{log.level}</span>
+                                    {log.step ? <span className="mr-2 text-sky-700">{log.step}</span> : null}
+                                    <span>{log.message}</span>
+                                    {log.metadata ? (
+                                      <span className="ml-2 text-muted-foreground">{JSON.stringify(log.metadata)}</span>
+                                    ) : null}
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
                       </FormSection>
 
                       {ifcAnalysis ? (
                         <div className="space-y-5">
+                          <FormSection title="Diagnostics geometrie IFC" description="Objets importables et objets a corriger avant import." className="p-4" columns={1}>
+                            {ifcGeometryDiagnostics ? (
+                              <div className="space-y-4">
+                                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                                  <ReadOnlyField label="Total" value={formatNumber(ifcGeometryDiagnostics.summary.total)} />
+                                  <ReadOnlyField label="OK" value={formatNumber(ifcGeometryDiagnostics.summary.ready)} />
+                                  <ReadOnlyField label="Manquants" value={formatNumber(ifcGeometryDiagnostics.summary.missing)} />
+                                  <ReadOnlyField label="Erreurs" value={formatNumber(ifcGeometryDiagnostics.summary.errors)} />
+                                  <ReadOnlyField label="Parents invalides" value={formatNumber(ifcGeometryDiagnostics.summary.blockedByParent)} />
+                                  <ReadOnlyField label="Importables" value={formatNumber(ifcGeometryDiagnostics.summary.importable)} />
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <Select value={ifcGeometryFilter} onValueChange={(value) => setIfcGeometryFilter(value as Ifc4GeometryFilter)}>
+                                    <SelectTrigger className="w-48">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="all">Tous</SelectItem>
+                                      <SelectItem value="ready">OK</SelectItem>
+                                      <SelectItem value="to_fix">A corriger</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Button
+                                    variant="outline"
+                                    disabled={!ifcAnalysisJobId}
+                                    onClick={() => ifcAnalysisJobId ? void apiDownload(`/imports/ifc4/analyze-jobs/${ifcAnalysisJobId}/geometry-diagnostics/export?format=csv`) : undefined}
+                                  >
+                                    <FileUpIcon className="size-4" />
+                                    Exporter les anomalies IFC
+                                  </Button>
+                                </div>
+                                <div className="max-h-96 space-y-2 overflow-auto rounded-xl border border-border/60 bg-background/70 p-3">
+                                  {ifcFilteredDiagnosticItems.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">Aucun diagnostic pour ce filtre.</p>
+                                  ) : (
+                                    ifcFilteredDiagnosticItems.slice(0, 80).map((item, index) => (
+                                      <div key={`${item.domain}-${item.path ?? item.globalId ?? item.label}-${index}`} className="rounded-xl border border-border/60 bg-background px-3 py-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <Badge variant={item.importable ? "outline" : "destructive"}>{item.importable ? "Importable" : "A corriger"}</Badge>
+                                          <Badge variant="outline">{item.domain === "spatial" ? "Spatial" : "Equipement"}</Badge>
+                                          <span className="font-medium text-foreground">{item.label}</span>
+                                          {item.reasonCode ? <span className="font-mono text-xs text-destructive">{item.reasonCode}</span> : null}
+                                        </div>
+                                        <div className="mt-2 grid gap-2 text-xs text-muted-foreground md:grid-cols-2 xl:grid-cols-4">
+                                          <span>Path: <span className="font-mono">{item.path ?? "-"}</span></span>
+                                          <span>Parent: <span className="font-mono">{item.parentPath ?? "-"}</span></span>
+                                          <span>Classe: <span className="font-mono">{item.sourceClass ?? "-"}</span></span>
+                                          <span>GlobalId: <span className="font-mono">{item.globalId ?? "-"}</span></span>
+                                          <span>Dimensions: <span className="font-mono">{item.worldSize ? `${item.worldSize.x.toFixed(2)} x ${item.worldSize.y.toFixed(2)} x ${item.worldSize.z.toFixed(2)}` : "-"}</span></span>
+                                          <span className="md:col-span-2 xl:col-span-3">Message: {item.messages.join(" | ")}</span>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Diagnostics en cours de chargement.</p>
+                            )}
+                          </FormSection>
                           <FormSection title="3. Spatial" description="Noeuds qui seront convertis en job spatial-nodes." className="p-4" columns={1}>
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                              <Select value={ifcSpatialGeometryFilter} onValueChange={(value) => setIfcSpatialGeometryFilter(value as Ifc4GeometryFilter)}>
+                                <SelectTrigger className="w-48">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">Tous</SelectItem>
+                                  <SelectItem value="ready">OK</SelectItem>
+                                  <SelectItem value="to_fix">A corriger</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              {ifcImportPolicy === "IMPORT_READY_ONLY" ? (
+                                <Badge variant="outline">Import partiel actif : seules les lignes OK seront ecrites</Badge>
+                              ) : null}
+                            </div>
                             <div className="space-y-2">
                               {ifcVisibleSpatialRows.length === 0 ? (
                                 <div className="rounded-xl border border-border/60 bg-background/70 px-4 py-5">
@@ -1684,6 +2680,10 @@ function ImportsPageContent() {
                                           <ReadOnlyField label="Reference externe" value={item.externalRef ?? "-"} />
                                           <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(item.geometry?.geometryStatus)} />
                                           <ReadOnlyField label="Dimensions XYZ" value={geometrySizeLabel(item.geometry)} />
+                                          <ReadOnlyField label="Message geometrie" value={item.geometry?.geometryMessage ?? "-"} />
+                                          <ReadOnlyField label="GlobalId" value={item.externalRef ?? "-"} />
+                                          <ReadOnlyField label="Bbox min" value={item.geometry?.worldBbox ? `${item.geometry.worldBbox.min.x}; ${item.geometry.worldBbox.min.y}; ${item.geometry.worldBbox.min.z}` : "-"} />
+                                          <ReadOnlyField label="Bbox max" value={item.geometry?.worldBbox ? `${item.geometry.worldBbox.max.x}; ${item.geometry.worldBbox.max.y}; ${item.geometry.worldBbox.max.z}` : "-"} />
                                         </div>
                                       </div>
                                     ) : null}
@@ -1725,18 +2725,46 @@ function ImportsPageContent() {
                                 />
                               </div>
                             ) : null}
-                            <div className="mt-4 flex justify-end">
+                            <div className="mt-4 flex flex-wrap justify-end gap-2">
                               <Button
                                 variant="outline"
-                                disabled={!hasImportsManage || !ifcAnalysis || hasIfcGeometryBlockingErrors || busyAction !== null}
-                                onClick={() => void createIfc4Job("spatial")}
+                                disabled={!hasImportsExecute || !ifcAnalysis || hasIfcGeometryBlockingErrors || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("spatial", "preview")}
                               >
-                                Creer job spatial
+                                <EyeIcon className="size-4" />
+                                Previsualiser spatial
+                              </Button>
+                              <Button
+                                variant="outline"
+                                disabled={!hasImportsExecute || !ifcWorkflow?.spatial.job || hasIfcGeometryBlockingErrors || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("spatial", "validate")}
+                              >
+                                <CheckCircle2Icon className="size-4" />
+                                Valider spatial
+                              </Button>
+                              <Button
+                                disabled={!hasImportsExecute || !ifcWorkflow?.spatial.job || hasIfcGeometryBlockingErrors || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("spatial", "execute")}
+                              >
+                                <PlayIcon className="size-4" />
+                                Importer spatial
                               </Button>
                             </div>
+                            <IfcWorkflowStepStatus
+                              title="Resultat import spatial"
+                              job={ifcWorkflow?.spatial.job}
+                              report={ifcWorkflow?.spatial.report}
+                              logs={ifcWorkflow?.spatial.logs ?? []}
+                              onCancel={() => void runIfc4WorkflowAction("spatial", "cancel")}
+                            />
                           </FormSection>
 
                           <FormSection title="4. Referentiels assets" description="References candidates detectees dans les proprietes IFC." className="p-4" columns={1}>
+                            <div className="mb-4 grid gap-3 md:grid-cols-3">
+                              <ReadOnlyField label="References candidates" value={formatNumber(ifcAssetRows.length)} />
+                              <ReadOnlyField label="Deja existantes" value={formatNumber(ifcAssetRows.filter((item) => item.exists).length)} />
+                              <ReadOnlyField label="A creer" value={formatNumber(ifcMissingReferences.length)} />
+                            </div>
                             <DataGrid
                               rows={pagedIfcAssetRows}
                               columns={[
@@ -1848,15 +2876,16 @@ function ImportsPageContent() {
                               {ifcApplyResult ? (
                                 <p className="text-sm text-muted-foreground">
                                   Derniere application : {formatNumber(ifcApplyResult.created.length)} creee(s),{" "}
+                                  {formatNumber(ifcApplyResult.existing.length)} existante(s),{" "}
                                   {formatNumber(ifcApplyResult.skipped.length)} ignoree(s).
                                 </p>
                               ) : <span />}
                               <Button
-                                variant="outline"
+                                variant={ifcMissingReferences.length > 0 ? "default" : "outline"}
                                 disabled={!hasImportsManage || !ifcAnalysis || ifcMissingReferences.length === 0 || busyAction !== null}
                                 onClick={() => void applyIfc4References()}
                               >
-                                Appliquer referentiels
+                                Creer les references manquantes
                               </Button>
                             </div>
                           </FormSection>
@@ -1913,11 +2942,11 @@ function ImportsPageContent() {
                                 </div>
                                 <Button
                                   variant="outline"
-                                  disabled={!hasImportsManage || !ifcFile || busyAction !== null}
-                                  onClick={() => void analyzeIfc4()}
+                                  disabled={!hasImportsExecute || !ifcAnalysisJobId || !ifcSpatialStepReady || !ifcAssetReferencesReady || busyAction !== null}
+                                  onClick={() => void runIfc4WorkflowAction("equipments", "preview")}
                                 >
                                   <RefreshCwIcon className="size-4" />
-                                  Actualiser le mapping
+                                  Recalculer la preview equipements
                                 </Button>
                               </div>
                               {ifcPropertyCandidates.length === 0 ? (
@@ -1970,6 +2999,21 @@ function ImportsPageContent() {
                                 value={formatNumber(ifcEquipmentValidationRows.length - ifcEquipmentAnomalyRows.length)}
                               />
                               <ReadOnlyField label="Anomalies de rattachement" value={formatNumber(ifcEquipmentAnomalyRows.length)} />
+                            </div>
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                              <Select value={ifcEquipmentGeometryFilter} onValueChange={(value) => setIfcEquipmentGeometryFilter(value as Ifc4GeometryFilter)}>
+                                <SelectTrigger className="w-48">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">Tous</SelectItem>
+                                  <SelectItem value="ready">OK</SelectItem>
+                                  <SelectItem value="to_fix">A corriger</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              {ifcImportPolicy === "IMPORT_READY_ONLY" ? (
+                                <Badge variant="outline">Import partiel actif : seuls les equipements OK seront ecrits</Badge>
+                              ) : null}
                             </div>
                             <DataGrid
                               rows={pagedIfcEquipmentRows}
@@ -2048,7 +3092,10 @@ function ImportsPageContent() {
                                   <p>Code : {item.internalCode}</p>
                                   <p>Piece : {item.numPiece ?? "-"}</p>
                                   <p>Reference externe : {item.externalRef ?? "-"}</p>
+                                  <p>GlobalId IFC : {item.sourceGlobalId ?? "-"}</p>
+                                  <p>Classe IFC : {item.sourceClass}</p>
                                   <p>Geometrie : {geometryBadgeLabel(item.geometry?.geometryStatus)}</p>
+                                  <p>Message geometrie : {item.geometry?.geometryMessage ?? "-"}</p>
                                   <p>Dimensions XYZ : {geometrySizeLabel(item.geometry)}</p>
                                   <p>Statut / proprietaire : {compactReferenceValue(item.classification.status)} / {compactReferenceValue(item.classification.owner)}</p>
                                   <p>Rattachement : {item.isSpatiallyAttached ? "Dans l arbre" : item.anomalyReasons.join(" ")}</p>
@@ -2058,12 +3105,12 @@ function ImportsPageContent() {
                               emptyTitle="Aucun equipement"
                               emptyDescription="Aucun equipement candidat n a ete extrait des classes selectionnees."
                             />
-                            {ifcEquipmentValidationRows.length > IFC_PREVIEW_PAGE_SIZE ? (
+                            {ifcFilteredEquipmentRows.length > IFC_PREVIEW_PAGE_SIZE ? (
                               <div className="mt-4">
                                 <PaginationBar
                                   page={ifcEquipmentPage}
                                   pageSize={IFC_PREVIEW_PAGE_SIZE}
-                                  total={ifcEquipmentValidationRows.length}
+                                  total={ifcFilteredEquipmentRows.length}
                                   pageSizeOptions={[IFC_PREVIEW_PAGE_SIZE]}
                                   onPageChange={setIfcEquipmentPage}
                                   onPageSizeChange={() => setIfcEquipmentPage(1)}
@@ -2108,15 +3155,43 @@ function ImportsPageContent() {
                                 </div>
                               )}
                             </div>
-                            <div className="mt-4 flex justify-end">
+                            {!ifcSpatialStepReady || !ifcAssetReferencesReady ? (
+                              <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800">
+                                Execute d abord le spatial et cree les references assets manquantes avant d importer les equipements.
+                              </div>
+                            ) : null}
+                            <div className="mt-4 flex flex-wrap justify-end gap-2">
                               <Button
                                 variant="outline"
-                                disabled={!hasImportsManage || !ifcAnalysis || ifcSelectedClasses.length === 0 || hasIfcGeometryBlockingErrors || busyAction !== null}
-                                onClick={() => void createIfc4Job("equipments")}
+                                disabled={!hasImportsExecute || !ifcAnalysis || ifcSelectedClasses.length === 0 || !ifcSpatialStepReady || !ifcAssetReferencesReady || hasIfcGeometryBlockingErrors || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("equipments", "preview")}
                               >
-                                Creer job equipements
+                                <EyeIcon className="size-4" />
+                                Previsualiser equipements
+                              </Button>
+                              <Button
+                                variant="outline"
+                                disabled={!hasImportsExecute || !ifcWorkflow?.equipments.job || !ifcSpatialStepReady || !ifcAssetReferencesReady || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("equipments", "validate")}
+                              >
+                                <CheckCircle2Icon className="size-4" />
+                                Valider equipements
+                              </Button>
+                              <Button
+                                disabled={!hasImportsExecute || !ifcWorkflow?.equipments.job || !ifcSpatialStepReady || !ifcAssetReferencesReady || busyAction !== null}
+                                onClick={() => void runIfc4WorkflowAction("equipments", "execute")}
+                              >
+                                <PlayIcon className="size-4" />
+                                Importer equipements
                               </Button>
                             </div>
+                            <IfcWorkflowStepStatus
+                              title="Resultat import equipements"
+                              job={ifcWorkflow?.equipments.job}
+                              report={ifcWorkflow?.equipments.report}
+                              logs={ifcWorkflow?.equipments.logs ?? []}
+                              onCancel={() => void runIfc4WorkflowAction("equipments", "cancel")}
+                            />
                           </FormSection>
                         </div>
                       ) : (
@@ -2429,10 +3504,9 @@ function ImportsPageContent() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {IMPORT_TARGET_DOMAINS.map((domain) => (
+                            {IMPORT_TARGET_DOMAINS.filter((domain) => EXECUTABLE_DOMAINS.has(domain)).map((domain) => (
                               <SelectItem key={domain} value={domain}>
                                 {TARGET_DOMAIN_LABELS[domain]}
-                                {EXECUTABLE_DOMAINS.has(domain) ? "" : " - non disponible"}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -2821,7 +3895,10 @@ function ImportsPageContent() {
                 <ReadOnlyField label="Classe IFC" value={selectedIfcEquipment.sourceClass} />
                 <ReadOnlyField label="GlobalId IFC" value={selectedIfcEquipment.sourceGlobalId ?? "-"} />
                 <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(selectedIfcEquipment.geometry?.geometryStatus)} />
+                <ReadOnlyField label="Message geometrie" value={selectedIfcEquipment.geometry?.geometryMessage ?? "-"} />
                 <ReadOnlyField label="Dimensions XYZ" value={geometrySizeLabel(selectedIfcEquipment.geometry)} />
+                <ReadOnlyField label="Bbox min" value={selectedIfcEquipment.geometry?.worldBbox ? `${selectedIfcEquipment.geometry.worldBbox.min.x}; ${selectedIfcEquipment.geometry.worldBbox.min.y}; ${selectedIfcEquipment.geometry.worldBbox.min.z}` : "-"} />
+                <ReadOnlyField label="Bbox max" value={selectedIfcEquipment.geometry?.worldBbox ? `${selectedIfcEquipment.geometry.worldBbox.max.x}; ${selectedIfcEquipment.geometry.worldBbox.max.y}; ${selectedIfcEquipment.geometry.worldBbox.max.z}` : "-"} />
               </div>
               {selectedIfcEquipment.anomalyReasons.length > 0 ? (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800">

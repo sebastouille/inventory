@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:migrations": "vitest run test/prisma-migrations.spec.ts",
     "db:generate": "powershell -ExecutionPolicy Bypass -File ../../scripts/prisma-generate-safe.ps1 -SchemaPath prisma/schema.prisma -DatabaseUrl postgresql://inventory:inventory@127.0.0.1:5560/inventory",
-    "db:migrate": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory prisma migrate dev --name init_inventory --schema ../../prisma/schema.prisma",
+    "db:migrate": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory prisma migrate deploy --schema ../../prisma/schema.prisma",
     "db:seed": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory TS_NODE_PROJECT=../../tsconfig.seed.json ts-node ../../prisma/seed.ts",
     "db:backfill-spatial": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory TS_NODE_PROJECT=../../tsconfig.seed.json ts-node ../../prisma/backfill-spatial.ts",
     "db:backfill-equipment-spatial": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory TS_NODE_PROJECT=../../tsconfig.seed.json ts-node ../../prisma/backfill-equipment-spatial.ts",

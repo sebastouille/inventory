@@ -8,11 +8,13 @@ import {
   Patch,
   Post,
   Query,
+  Header,
   UploadedFile,
   UseGuards,
   UseInterceptors
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { tmpdir } from "node:os";
 import { ApiBearerAuth, ApiConsumes, ApiTags } from "../swagger-compat";
 import { IMPORT_TARGET_DOMAINS, type ImportTargetDomain } from "@inventory/shared";
 import { CurrentAuth } from "../auth/current-auth.decorator";
@@ -22,7 +24,7 @@ import { RequirePermissions } from "../auth/permissions.decorator";
 import { PermissionsGuard } from "../auth/permissions.guard";
 import { CreateImportJobDto } from "./dto/create-import-job.dto";
 import { CreateImportProfileDto } from "./dto/create-import-profile.dto";
-import { Ifc4AssistantDto } from "./dto/ifc4-assistant.dto";
+import { Ifc4AssistantDto, Ifc4AssistantProfileDto } from "./dto/ifc4-assistant.dto";
 import { ListImportJobsDto } from "./dto/list-import-jobs.dto";
 import { ListImportProfilesDto } from "./dto/list-import-profiles.dto";
 import { RunImportJobDto } from "./dto/run-import-job.dto";
@@ -90,6 +92,190 @@ export class ImportsController {
   @Get("jobs")
   listJobs(@CurrentAuth() auth: AuthenticatedUser, @Query() query: ListImportJobsDto) {
     return this.importsService.listJobs(auth.organizationId, query);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/profiles")
+  listIfc4Profiles(@CurrentAuth() auth: AuthenticatedUser) {
+    return this.ifc4AssistantService.listAssistantProfiles(auth.organizationId);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/profiles")
+  createIfc4Profile(@CurrentAuth() auth: AuthenticatedUser, @Body() body: Ifc4AssistantProfileDto) {
+    return this.ifc4AssistantService.createAssistantProfile(auth, body);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/profiles/:profileId")
+  getIfc4Profile(@CurrentAuth() auth: AuthenticatedUser, @Param("profileId") profileId: string) {
+    return this.ifc4AssistantService.getAssistantProfile(auth.organizationId, profileId);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Patch("ifc4/profiles/:profileId")
+  updateIfc4Profile(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Param("profileId") profileId: string,
+    @Body() body: Ifc4AssistantProfileDto
+  ) {
+    return this.ifc4AssistantService.updateAssistantProfile(auth, profileId, body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/profiles/:profileId/archive")
+  archiveIfc4Profile(@CurrentAuth() auth: AuthenticatedUser, @Param("profileId") profileId: string) {
+    return this.ifc4AssistantService.archiveAssistantProfile(auth, profileId);
+  }
+
+  @RequirePermissions("imports.manage")
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(FileInterceptor("file", { dest: tmpdir() }))
+  @Post("ifc4/analyze-jobs/quick-parse")
+  quickParseIfc4AnalysisJob(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Body() body: Ifc4AssistantDto,
+    @UploadedFile() file?: { originalname: string; mimetype: string; buffer?: Buffer; path?: string; size?: number }
+  ) {
+    return this.ifc4AssistantService.quickParseAnalysisJob(auth, file, body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @ApiConsumes("multipart/form-data")
+  @UseInterceptors(FileInterceptor("file", { dest: tmpdir() }))
+  @Post("ifc4/analyze-jobs")
+  createIfc4AnalysisJob(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Body() body: Ifc4AssistantDto,
+    @UploadedFile() file?: { originalname: string; mimetype: string; buffer?: Buffer; path?: string; size?: number }
+  ) {
+    return this.ifc4AssistantService.createAnalysisJob(auth, file, body);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/analyze-jobs/:jobId/quick-result")
+  getIfc4QuickParseResult(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.getQuickParseResult(auth.organizationId, jobId);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/start")
+  startIfc4AnalysisJob(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Param("jobId") jobId: string,
+    @Body() body: Ifc4AssistantDto
+  ) {
+    return this.ifc4AssistantService.startAnalysisJob(auth, jobId, body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/cancel")
+  cancelIfc4AnalysisJob(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.cancelAnalysisJob(auth, jobId);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/analyze-jobs/:jobId/result")
+  getIfc4AnalysisJobResult(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.getAnalysisResult(auth.organizationId, jobId);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/analyze-jobs/:jobId/geometry-diagnostics")
+  getIfc4GeometryDiagnostics(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.getGeometryDiagnostics(auth.organizationId, jobId);
+  }
+
+  @RequirePermissions("imports.read")
+  @Header("Content-Type", "text/csv; charset=utf-8")
+  @Header("Content-Disposition", "attachment; filename=\"ifc4-geometry-diagnostics.csv\"")
+  @Get("ifc4/analyze-jobs/:jobId/geometry-diagnostics/export")
+  exportIfc4GeometryDiagnostics(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.exportGeometryDiagnosticsCsv(auth.organizationId, jobId);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("ifc4/analyze-jobs/:jobId/workflow")
+  getIfc4Workflow(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.getWorkflow(auth, jobId);
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/spatial/preview")
+  previewIfc4Spatial(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "spatial", "preview", body);
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/spatial/validate")
+  validateIfc4Spatial(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "spatial", "validate", body);
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/spatial/execute")
+  executeIfc4Spatial(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "spatial", "execute", body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/spatial/cancel")
+  cancelIfc4Spatial(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "spatial", "cancel");
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/equipments/preview")
+  previewIfc4Equipments(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "equipments", "preview", body);
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/equipments/validate")
+  validateIfc4Equipments(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "equipments", "validate", body);
+  }
+
+  @RequirePermissions("imports.execute")
+  @Post("ifc4/analyze-jobs/:jobId/equipments/execute")
+  executeIfc4Equipments(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string, @Body() body: Ifc4AssistantDto) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "equipments", "execute", body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/equipments/cancel")
+  cancelIfc4Equipments(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.ifc4AssistantService.runWorkflowChildAction(auth, jobId, "equipments", "cancel");
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/spatial/create-job")
+  createIfc4SpatialJobFromAnalysis(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Param("jobId") jobId: string,
+    @Body() body: Ifc4AssistantDto
+  ) {
+    return this.ifc4AssistantService.createSpatialJobFromAnalysis(auth, jobId, body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/equipments/create-job")
+  createIfc4EquipmentsJobFromAnalysis(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Param("jobId") jobId: string,
+    @Body() body: Ifc4AssistantDto
+  ) {
+    return this.ifc4AssistantService.createEquipmentsJobFromAnalysis(auth, jobId, body);
+  }
+
+  @RequirePermissions("imports.manage")
+  @Post("ifc4/analyze-jobs/:jobId/asset-references/apply")
+  applyIfc4AssetReferencesFromAnalysis(
+    @CurrentAuth() auth: AuthenticatedUser,
+    @Param("jobId") jobId: string,
+    @Body() body: Ifc4AssistantDto
+  ) {
+    return this.ifc4AssistantService.applyAssetReferencesFromAnalysis(auth, jobId, body);
   }
 
   @RequirePermissions("imports.manage")
@@ -162,6 +348,12 @@ export class ImportsController {
   @Get("jobs/:jobId")
   getJob(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
     return this.importsService.getJob(auth.organizationId, jobId);
+  }
+
+  @RequirePermissions("imports.read")
+  @Get("jobs/:jobId/logs")
+  getJobLogs(@CurrentAuth() auth: AuthenticatedUser, @Param("jobId") jobId: string) {
+    return this.importsService.listJobLogs(auth.organizationId, jobId);
   }
 
   @RequirePermissions("imports.manage")

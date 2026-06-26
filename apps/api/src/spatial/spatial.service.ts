@@ -75,7 +75,7 @@ type PreparedSpatialRow = {
 
 type ExecutionCandidate = PreparedSpatialRow & {
   parentId: string | null;
-  operation: "CREATE" | "UPDATE" | "REJECT";
+  operation: "CREATE" | "UPDATE" | "NO_OP" | "REJECT";
   existingId: string | null;
 };
 
@@ -157,6 +157,17 @@ function parseOptionalNumber(value: string | number | boolean | null | undefined
   }
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function jsonCompareValue(value: unknown) {
+  if (value == null || value === Prisma.JsonNull) {
+    return "null";
+  }
+  return JSON.stringify(value);
+}
+
+function nullableNumberCompare(left: number | null, right: number | null) {
+  return left === right || (left == null && right == null);
 }
 
 @Injectable()
@@ -963,6 +974,33 @@ export class SpatialService {
     };
   }
 
+  private isSpatialImportNoOp(
+    existing: Prisma.SpatialNodeGetPayload<{}>,
+    row: PreparedSpatialRow,
+    parentId: string | null
+  ) {
+    return (
+      existing.type === row.type &&
+      existing.code === row.code &&
+      existing.label === row.label &&
+      (existing.description ?? null) === row.description &&
+      existing.path === row.path &&
+      existing.parentId === parentId &&
+      (existing.externalRef ?? null) === row.externalRef &&
+      (existing.sourceClass ?? null) === row.sourceClass &&
+      jsonCompareValue(existing.sourceMetadata) === jsonCompareValue(row.sourceMetadata) &&
+      (existing.geometrySource ?? null) === row.geometrySource &&
+      jsonCompareValue(existing.geometryMetadata) === jsonCompareValue(row.geometryMetadata) &&
+      nullableNumberCompare(existing.worldCenterX, row.worldCenterX) &&
+      nullableNumberCompare(existing.worldCenterY, row.worldCenterY) &&
+      nullableNumberCompare(existing.worldCenterZ, row.worldCenterZ) &&
+      nullableNumberCompare(existing.worldSizeX, row.worldSizeX) &&
+      nullableNumberCompare(existing.worldSizeY, row.worldSizeY) &&
+      nullableNumberCompare(existing.worldSizeZ, row.worldSizeZ) &&
+      existing.isActive === row.isActive
+    );
+  }
+
   async buildImportReport(input: {
     organizationId: string;
     mode: ImportReportMode;
@@ -1049,14 +1087,14 @@ export class SpatialService {
         }
       }
 
-      let operation: "CREATE" | "UPDATE" | "REJECT" = "CREATE";
+      let operation: "CREATE" | "UPDATE" | "NO_OP" | "REJECT" = "CREATE";
       let existingId: string | null = null;
       if (messages.length > 0 || !row.path || !row.code || !row.label || row.depth == null || !row.type) {
         operation = "REJECT";
       } else {
         const existingByPathNode = existingByPath.get(row.path);
         if (existingByPathNode) {
-          operation = "UPDATE";
+          operation = this.isSpatialImportNoOp(existingByPathNode, row, parentId) ? "NO_OP" : "UPDATE";
           existingId = existingByPathNode.id;
         } else {
           const parentCodeKey = `${parentId ?? "ROOT"}::${row.code}`;
@@ -1086,6 +1124,8 @@ export class SpatialService {
       let status: ImportRowStatus;
       if (result.operation === "REJECT") {
         status = "REJECTED";
+      } else if (result.operation === "NO_OP") {
+        status = "NO_OP";
       } else if (input.mode === "EXECUTE") {
         status = result.operation === "CREATE" ? "CREATED" : "UPDATED";
       } else if (result.messages.length > 0) {
@@ -1122,6 +1162,7 @@ export class SpatialService {
     });
 
     const successfulRows = rows.filter((row) => row.status !== "REJECTED");
+    const writableRows = rows.filter((row) => !["REJECTED", "NO_OP", "SKIPPED"].includes(row.status));
     return {
       mode: input.mode,
       targetDomain: "spatial-nodes" as ImportTargetDomain,
@@ -1132,7 +1173,7 @@ export class SpatialService {
         rowsValid: successfulRows.length,
         rowsRejected: rows.filter((row) => row.status === "REJECTED").length,
         rowsWithWarnings: rows.filter((row) => row.status === "WARNING").length,
-        simulatedWrites: input.mode === "EXECUTE" ? 0 : successfulRows.length,
+        simulatedWrites: input.mode === "EXECUTE" ? 0 : writableRows.length,
         appliedWrites: 0,
         executionMode: input.mode,
         targetDomain: "spatial-nodes"
@@ -1179,7 +1220,7 @@ export class SpatialService {
     sourceKind?: "CSV" | "XLSX" | null;
   }) {
     const executableRows = input.report.rows
-      .filter((row) => row.status !== "REJECTED" && typeof row.resolvedTargetKey === "string")
+      .filter((row) => !["REJECTED", "NO_OP", "SKIPPED"].includes(row.status) && typeof row.resolvedTargetKey === "string")
       .sort((left, right) => String(left.resolvedTargetKey).split("/").length - String(right.resolvedTargetKey).split("/").length);
 
     let appliedWrites = 0;

@@ -81,14 +81,24 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
 - `StockMovement` reste reserve aux mouvements de stock du domaine `products`
 - les rattachements entre assets sont controles par `EquipmentFamilyAttachmentRule`
 - `ImportProfile` represente un template de mapping ETL par organisation, domaine cible et type de source
+- `Ifc4AssistantProfile` represente un profil dedie a l assistant IFC4, distinct de `ImportProfile`, avec classes/proprietes selectionnees, mappings equipements, overrides spatial/referentiels, niveau de geometrie, limite produits et politique d import
 - `ImportJob` represente une execution d import par organisation avec statut, source chargee, snapshot d en-tetes, mappings resolus, resume et rapport
+- `ImportJob` represente aussi le job de preparation `ifc4-analysis`, non executable directement, qui stocke le fichier IFC source et reference un artefact de resultat d analyse
+- un job `ifc4-analysis` peut etre parent de jobs enfants `spatial-nodes` et `equipments` via `ImportJob.options.sourceAnalysisJobId`; cette relation reste applicative et ne cree pas de cle etrangere dediee
+- apres parse rapide IFC4, `ImportJob.status=READY` signifie que le fichier source est stocke, que les classes IFC sont connues, et que la previsualisation complete peut etre lancee sans re-upload
+- `ImportJob.status=CANCELLED` peut representer une annulation utilisateur d analyse IFC4 ; les artefacts partiels sont conserves pour diagnostic, mais aucun job metier ne doit etre cree depuis cet etat
+- les options du job `ifc4-analysis` contiennent le profil d analyse ephemere : classes IFC selectionnees, proprietes selectionnees, limite `maxProducts`, niveau de geometrie et limite de details
 - `ImportJobWrite` represente une ecriture metier reelle appliquee par `imports.execute`, avec type d operation `CREATED` ou `UPDATED`, entite cible, domaine et chemin cible optionnel
+- les rapports d imports peuvent contenir le statut ligne `NO_OP`; ce statut n est pas une ecriture et ne cree pas de ligne `ImportJobWrite`
+- `ImportJobLog` journalise les etapes longues d un job, avec niveau, etape, message, metadonnees et horodatage
 - aucun modele dedie n est ajoute pour le challenge de changement de mot de passe V1 ; le challenge repose sur un JWT court derive de l etat courant du `passwordHash`
 - la recherche globale V1 est une projection runtime uniquement ; elle ne persiste ni index metier dedie ni table de suggestion en base dans cette vague
-- les domaines cibles actuellement prepares par `imports` sont `spatial-nodes`, `equipments` et `immobilizations`
-- l assistant IFC4 ne cree pas de nouvelle table ; il transforme le fichier IFC4 en lignes source pour les domaines imports existants
-- les corrections IFC4 de preview sont transmises comme payload multipart ephemere et ne sont pas persistees dans un modele dedie en V1
-- les mappings de proprietes IFC4 equipements sont aussi des options ephemeres en V1 ; ils ne creent pas de table de profil et servent seulement a transformer les proprietes `IfcPropertySingleValue` en codes de referentiels assets et champs equipement (`internalCode`, `numPiece`, `externalRef`) avant creation de job
+- les domaines cibles actuellement prepares par `imports` sont `ifc4-analysis`, `spatial-nodes`, `equipments` et `immobilizations`; seul `ifc4-analysis` est un domaine de preparation non executable
+- l assistant IFC4 transforme le fichier IFC4 en lignes source pour les domaines imports existants, puis orchestre les jobs enfants et stocke le dernier resultat d application des referentiels assets dans les options JSON du job d analyse
+- les corrections IFC4 de preview restent transmises au lancement comme payload assistant, mais elles peuvent maintenant etre sauvegardees dans `Ifc4AssistantProfile` pour reutilisation
+- les mappings de proprietes IFC4 equipements peuvent etre persistants via `Ifc4AssistantProfile.equipmentMappings`; ils transforment les proprietes `IfcPropertySingleValue` en codes de referentiels assets et champs equipement (`internalCode`, `numPiece`, `externalRef`) avant creation de job
+- le mode `IMPORT_READY_ONLY` stocke les diagnostics exclus dans `ImportJob.options.ifcGeometryExcludedDiagnostics` pour enrichir le rapport sans executer de lignes invalides
+- les resultats d analyse IFC4 restent hors base : JSON de parse rapide, JSON de preview, flux NDJSON metadata et flux NDJSON geometrie sont stockes sous `.runtime/imports/<organizationId>/<jobId>/`
 - les donnees source IFC4 sont conservees dans les champs existants :
   - `SpatialNode.externalRef` pour le GlobalId ou la reference source
   - `SpatialNode.sourceClass` pour la classe IFC ou la provenance technique

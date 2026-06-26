@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import math
 import os
 import sys
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, TextIO, Tuple
 
 
 Vector = List[float]
@@ -17,6 +18,35 @@ BBox = Dict[str, Vector]
 
 SPATIAL_CLASSES = ("IfcSite", "IfcBuilding", "IfcBuildingStorey", "IfcSpace")
 PRODUCT_CLASSES = ("IfcElement",)
+DEFAULT_PRODUCT_CLASSES = (
+    "IfcFurniture",
+    "IfcFurnishingElement",
+    "IfcFlowTerminal",
+    "IfcBuildingElementProxy",
+    "IfcDistributionElement",
+    "IfcDistributionFlowElement",
+    "IfcElementAssembly",
+)
+IFC_CLASS_ALIASES = {
+    "IFCFURNITURE": "IfcFurniture",
+    "IFCFURNISHINGELEMENT": "IfcFurnishingElement",
+    "IFCFLOWTERMINAL": "IfcFlowTerminal",
+    "IFCBUILDINGELEMENTPROXY": "IfcBuildingElementProxy",
+    "IFCDISTRIBUTIONELEMENT": "IfcDistributionElement",
+    "IFCDISTRIBUTIONFLOWELEMENT": "IfcDistributionFlowElement",
+    "IFCELEMENTASSEMBLY": "IfcElementAssembly",
+    "IFCELEMENT": "IfcElement",
+}
+
+
+def log(level: str, step: str, message: str, **metadata: Any) -> None:
+    payload = {
+        "level": level,
+        "step": step,
+        "message": message,
+        "metadata": metadata,
+    }
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def entity_id(entity: Any) -> Optional[int]:
@@ -34,30 +64,62 @@ def safe_string(value: Any) -> Optional[str]:
 
 
 def bbox_from_vertices(vertices: Iterable[float]) -> Optional[BBox]:
-    values = list(vertices)
-    if len(values) < 3:
-        return None
-
-    xs: List[float] = []
-    ys: List[float] = []
-    zs: List[float] = []
-    for index in range(0, len(values) - 2, 3):
-        x = float(values[index])
-        y = float(values[index + 1])
-        z = float(values[index + 2])
+    iterator = iter(vertices)
+    min_x = min_y = min_z = math.inf
+    max_x = max_y = max_z = -math.inf
+    count = 0
+    while True:
+        try:
+            x = float(next(iterator))
+            y = float(next(iterator))
+            z = float(next(iterator))
+        except StopIteration:
+            break
         if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
             continue
-        xs.append(x)
-        ys.append(y)
-        zs.append(z)
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        min_z = min(min_z, z)
+        max_x = max(max_x, x)
+        max_y = max(max_y, y)
+        max_z = max(max_z, z)
+        count += 1
 
-    if not xs:
+    if count == 0:
         return None
 
     return {
-        "min": [min(xs), min(ys), min(zs)],
-        "max": [max(xs), max(ys), max(zs)],
+        "min": [min_x, min_y, min_z],
+        "max": [max_x, max_y, max_z],
     }
+
+
+def bbox_and_shape_parts_from_vertices(vertices: Iterable[float], max_shape_parts: int) -> Tuple[Optional[BBox], List[BBox]]:
+    values = list(vertices)
+    bbox = bbox_from_vertices(values)
+    if bbox is None or max_shape_parts <= 1:
+        return bbox, []
+
+    size = bbox_size(bbox)
+    axis = max(range(3), key=lambda index: size[index])
+    bins = max(1, min(max_shape_parts, 24))
+    axis_min = bbox["min"][axis]
+    axis_max = bbox["max"][axis]
+    axis_size = axis_max - axis_min
+    if axis_size <= 0:
+        return bbox, []
+
+    grouped: List[Optional[BBox]] = [None for _ in range(bins)]
+    for index in range(0, len(values) - 2, 3):
+        point = [float(values[index]), float(values[index + 1]), float(values[index + 2])]
+        if not all(math.isfinite(value) for value in point):
+            continue
+        bucket = min(bins - 1, max(0, int(((point[axis] - axis_min) / axis_size) * bins)))
+        point_bbox: BBox = {"min": point, "max": point}
+        grouped[bucket] = merge_bbox(grouped[bucket], point_bbox)
+
+    parts = [part for part in grouped if part is not None]
+    return bbox, parts[:max_shape_parts]
 
 
 def bbox_center(bbox: BBox) -> Vector:
@@ -161,7 +223,9 @@ def make_settings() -> Any:
     return settings
 
 
-def extract_geometry(entity: Any, settings: Any) -> Tuple[Optional[BBox], Optional[str]]:
+def extract_geometry(entity: Any, settings: Any, geometry_level: str, max_shape_parts: int) -> Tuple[Optional[BBox], Optional[str], List[BBox]]:
+    if geometry_level == "NONE":
+        return None, None, []
     try:
         import ifcopenshell.geom  # type: ignore
 
@@ -169,17 +233,21 @@ def extract_geometry(entity: Any, settings: Any) -> Tuple[Optional[BBox], Option
         geometry = getattr(shape, "geometry", None)
         vertices = getattr(geometry, "verts", None)
         if vertices is None:
-            return None, "NO_VERTICES"
-        bbox = bbox_from_vertices(vertices)
+            return None, "NO_VERTICES", []
+        if geometry_level == "INTERMEDIATE":
+            bbox, shape_parts = bbox_and_shape_parts_from_vertices(vertices, max_shape_parts)
+        else:
+            bbox = bbox_from_vertices(vertices)
+            shape_parts = []
         if bbox is None:
-            return None, "EMPTY_BBOX"
-        return bbox, None
+            return None, "EMPTY_BBOX", []
+        return bbox, None, shape_parts
     except Exception as error:
-        return None, str(error)
+        return None, str(error), []
 
 
-def serialize_entity(entity: Any, settings: Any, kind: str) -> Dict[str, Any]:
-    bbox, error = extract_geometry(entity, settings)
+def serialize_entity(entity: Any, settings: Any, kind: str, geometry_level: str, max_shape_parts: int) -> Dict[str, Any]:
+    bbox, error, shape_parts = extract_geometry(entity, settings, geometry_level, max_shape_parts)
     global_id = safe_string(getattr(entity, "GlobalId", None))
     name = safe_string(getattr(entity, "Name", None))
     description = safe_string(getattr(entity, "Description", None))
@@ -197,6 +265,8 @@ def serialize_entity(entity: Any, settings: Any, kind: str) -> Dict[str, Any]:
         "hasGeometry": bbox is not None,
         "geometryError": error,
     }
+    if shape_parts:
+        item["shapeParts"] = shape_parts
     if kind == "spatial":
         item["childrenCount"] = get_children_count(entity)
         item["elevation"] = safe_float(getattr(entity, "Elevation", None))
@@ -241,27 +311,110 @@ def entities_by_types(model: Any, class_names: Iterable[str]) -> List[Any]:
     return items
 
 
-def extract(input_path: str, max_products: int) -> Dict[str, Any]:
+def parse_class_list(value: str) -> List[str]:
+    text = (value or "").strip()
+    if not text:
+        return list(DEFAULT_PRODUCT_CLASSES)
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [canonical_ifc_class(str(item).strip()) for item in parsed if str(item).strip()]
+    except Exception:
+        pass
+    return [canonical_ifc_class(item.strip()) for item in text.split(",") if item.strip()]
+
+
+def canonical_ifc_class(value: str) -> str:
+    if not value:
+        return value
+    normalized = value.strip()
+    alias = IFC_CLASS_ALIASES.get(normalized.upper())
+    if alias:
+        return alias
+    if normalized.startswith("IFC") and normalized.isupper():
+        return "Ifc" + "".join(part.capitalize() for part in normalized[3:].split("_"))
+    return normalized
+
+
+def write_ndjson_line(handle: Optional[TextIO], item: Dict[str, Any]) -> None:
+    if handle is None:
+        return
+    handle.write(json.dumps(item, ensure_ascii=True))
+    handle.write("\n")
+    handle.flush()
+
+
+def extract(
+    input_path: str,
+    max_products: int,
+    selected_classes: List[str],
+    geometry_level: str,
+    max_shape_parts: int,
+    metadata_output: Optional[str],
+    geometry_output: Optional[str],
+) -> Dict[str, Any]:
     import ifcopenshell  # type: ignore
 
     started = time.time()
+    geometry_level = geometry_level.upper()
+    if geometry_level not in ("NONE", "MINIMUM", "INTERMEDIATE"):
+        geometry_level = "MINIMUM"
+    log("INFO", "open_file", "Ouverture du fichier IFC", path=input_path)
     model = ifcopenshell.open(input_path)
+    log("INFO", "open_file", "Fichier IFC ouvert", schema=get_schema(model))
     settings = make_settings()
     warnings: List[str] = []
 
+    log("INFO", "list_spatial", "Recherche des objets spatiaux")
     spatial_entities = entities_by_types(model, SPATIAL_CLASSES)
-    product_entities = entities_by_types(model, PRODUCT_CLASSES)
+    log(
+        "INFO",
+        "list_products",
+        "Recherche des produits IFC",
+        maxProducts=max_products,
+        selectedClasses=selected_classes,
+        geometryLevel=geometry_level,
+    )
+    product_entities = entities_by_types(model, selected_classes or DEFAULT_PRODUCT_CLASSES)
     product_entities = [
         entity
         for entity in product_entities
         if not any(entity.is_a(spatial_class) for spatial_class in SPATIAL_CLASSES)
     ][:max_products]
+    log(
+        "INFO",
+        "list_products",
+        "Objets IFC detectes",
+        spatialCount=len(spatial_entities),
+        productCount=len(product_entities),
+    )
 
-    spatial_objects = [serialize_entity(entity, settings, "spatial") for entity in spatial_entities]
-    products = [serialize_entity(entity, settings, "product") for entity in product_entities]
+    spatial_objects = []
+    products = []
+    metadata_context = open(metadata_output, "w", encoding="utf-8") if metadata_output else nullcontext(None)
+    geometry_context = open(geometry_output, "w", encoding="utf-8") if geometry_output else nullcontext(None)
+    with metadata_context as metadata_handle, geometry_context as geometry_handle:
+        for index, entity in enumerate(spatial_entities, start=1):
+            item = serialize_entity(entity, settings, "spatial", geometry_level, max_shape_parts)
+            spatial_objects.append(item)
+            write_ndjson_line(metadata_handle, {"kind": "spatial", **item})
+            if item.get("hasGeometry"):
+                write_ndjson_line(geometry_handle, {"kind": "spatial", **item})
+            if index == len(spatial_entities) or index % 50 == 0:
+                log("INFO", "extract_spatial_geometry", "Extraction geometrie spatiale", processed=index, total=len(spatial_entities))
+
+        for index, entity in enumerate(product_entities, start=1):
+            item = serialize_entity(entity, settings, "product", geometry_level, max_shape_parts)
+            products.append(item)
+            write_ndjson_line(metadata_handle, {"kind": "product", **item})
+            if item.get("hasGeometry"):
+                write_ndjson_line(geometry_handle, {"kind": "product", **item})
+            if index == len(product_entities) or index % 250 == 0:
+                log("INFO", "extract_product_geometry", "Extraction geometrie produits", processed=index, total=len(product_entities))
 
     # Many IFC spatial containers have no own representation. Their usable
     # volume for this application is derived from contained products/children.
+    log("INFO", "aggregate_spatial", "Agregation des volumes spatiaux")
     for item in spatial_objects:
         if item.get("hasGeometry"):
             continue
@@ -298,12 +451,14 @@ def extract(input_path: str, max_products: int) -> Dict[str, Any]:
     for item in spatial_objects + products:
         global_bbox = merge_bbox(global_bbox, item.get("bbox"))
 
-    product_errors = sum(1 for item in products if not item.get("hasGeometry"))
-    spatial_errors = sum(1 for item in spatial_objects if not item.get("hasGeometry"))
+    product_errors = 0 if geometry_level == "NONE" else sum(1 for item in products if not item.get("hasGeometry"))
+    spatial_errors = 0 if geometry_level == "NONE" else sum(1 for item in spatial_objects if not item.get("hasGeometry"))
     if product_errors:
         warnings.append(f"{product_errors} products without extractable geometry")
+        log("WARNING", "diagnostics", "Produits sans geometrie exploitable", count=product_errors)
     if spatial_errors:
         warnings.append(f"{spatial_errors} spatial objects without extractable geometry")
+        log("WARNING", "diagnostics", "Noeuds spatiaux sans geometrie exploitable", count=spatial_errors)
 
     return {
         "version": "ifcopenshell-extract-v1",
@@ -320,6 +475,7 @@ def extract(input_path: str, max_products: int) -> Dict[str, Any]:
         "products": products,
         "storeys": storeys,
         "stats": {
+            "geometryLevel": 0 if geometry_level == "NONE" else 1 if geometry_level == "MINIMUM" else 2,
             "totalSpatialObjects": len(spatial_objects),
             "spatialWithGeometry": len(spatial_objects) - spatial_errors,
             "spatialWithoutGeometry": spatial_errors,
@@ -337,16 +493,34 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Extract IFC world bounding boxes")
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--max-products", type=int, default=20000)
+    parser.add_argument("--max-products", type=int, default=5000)
+    parser.add_argument("--selected-classes", default="")
+    parser.add_argument("--geometry-level", default="MINIMUM")
+    parser.add_argument("--max-shape-parts", type=int, default=12)
+    parser.add_argument("--metadata-output")
+    parser.add_argument("--geometry-output")
     args = parser.parse_args()
 
     try:
-        result = extract(args.input, max(1, args.max_products))
+        result = extract(
+            args.input,
+            max(1, args.max_products),
+            parse_class_list(args.selected_classes),
+            args.geometry_level,
+            max(1, args.max_shape_parts),
+            args.metadata_output,
+            args.geometry_output,
+        )
+        log("INFO", "write_output", "Ecriture du resultat d extraction", output=args.output)
         with open(args.output, "w", encoding="utf-8") as output:
             json.dump(result, output, ensure_ascii=True, indent=2)
+        log("INFO", "completed", "Extraction IFC terminee", **result.get("stats", {}))
         return 0
     except Exception as error:
         error_payload = {
+            "level": "ERROR",
+            "step": "failed",
+            "message": "Extraction IFC en erreur",
             "version": "ifcopenshell-extract-v1",
             "error": str(error),
         }

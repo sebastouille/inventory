@@ -123,6 +123,70 @@ describe("EquipmentsImportService", () => {
     expect(report.rows[0].normalizedValues.currentSpatialNodeId).toBe("spatial-1");
   });
 
+  it("marks an unchanged existing equipment as NO_OP", async () => {
+    const prisma = createPrismaMock([{ id: "type-1", code: "BUREAU", isActive: true }]);
+    prisma.equipment.findMany.mockResolvedValue([
+      {
+        id: "equipment-1",
+        internalCode: "IFC-001",
+        numPiece: null,
+        externalRef: null,
+        serialNumber: null,
+        equipmentTypeId: "type-1",
+        equipmentModelId: null,
+        equipmentStatusId: "status-1",
+        ownerEntityId: "owner-1",
+        currentSpatialNodeId: "spatial-1",
+        immobilizationId: null,
+        technicalCharacteristics: null,
+        geometrySource: null,
+        geometryMetadata: null,
+        worldCenterX: null,
+        worldCenterY: null,
+        worldCenterZ: null,
+        worldSizeX: null,
+        worldSizeY: null,
+        worldSizeZ: null,
+        notes: null,
+        receivedAt: null,
+        commissionedAt: null,
+        lastInventoryAt: null,
+        isDeleted: false
+      }
+    ]);
+    const service = new EquipmentsImportService(
+      prisma as never,
+      { log: vi.fn() } as never,
+      { recordForAssetMutation: vi.fn() } as never
+    );
+    const snapshot = await sourceSnapshot(["Code", "Type", "Statut", "Proprietaire", "Chemin"], [
+      {
+        Code: "IFC-001",
+        Type: "BUREAU",
+        Statut: "EN_SERVICE",
+        Proprietaire: "CPRP",
+        Chemin: "CPRPSNCF-MARSEILLE/LECLERC/R+1/B"
+      }
+    ]);
+
+    const report = await service.buildImportReport({
+      organizationId: "org-1",
+      mode: "VALIDATE",
+      sourceSnapshot: snapshot,
+      mappings: [
+        { sourceColumn: "Code", targetField: "internalCode", transformType: "TRIM" },
+        { sourceColumn: "Type", targetField: "equipmentTypeCode", transformType: "TRIM" },
+        { sourceColumn: "Statut", targetField: "equipmentStatusCode", transformType: "TRIM" },
+        { sourceColumn: "Proprietaire", targetField: "ownerEntityCode", transformType: "TRIM" },
+        { sourceColumn: "Chemin", targetField: "currentSpatialPath", transformType: "TRIM" }
+      ]
+    });
+
+    expect(report.rows[0].status).toBe("NO_OP");
+    expect(report.rows[0].messages).toContain("OPERATION_NO_OP");
+    expect(report.summary.simulatedWrites).toBe(0);
+  });
+
   it("rejects equipment rows when the referenced type is missing", async () => {
     const service = new EquipmentsImportService(
       createPrismaMock([]) as never,

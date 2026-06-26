@@ -4,7 +4,7 @@ Utiliser les Architecture Decision Records pour les choix qui modifient l'archit
 
 ## Nommage
 
-- format : `NNNN-titre-kebab-case.md`
+- format : `NNNN-titre-case.md`
 - exemple : `0001-documentation-governance-workflow.md`
 
 ## Sections obligatoires
@@ -36,3 +36,7 @@ Utiliser les Architecture Decision Records pour les choix qui modifient l'archit
 - [0019 - scene 3D IFC4 simplifiee et Three.js](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0019-scene-3d-ifc4-simplifiee-threejs.md>)
 - [0020 - IfcOpenShell Python pour extraction geometrique IFC4](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0020-ifcopenshell-python-pour-extraction-geometrique-ifc4.md>)
 - [0023 - Bootstrap production et exposition Dokploy](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0023-bootstrap-production-et-exposition-dokploy.md>)
+- [0024 - Analyse IFC4 asynchrone via ImportJob](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0024-analyse-ifc4-asynchrone-via-import-job.md>)
+- [0025 - Profil IFC4 et geometrie progressive](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0025-profil-ifc4-et-geometrie-progressive.md>)
+- [0026 - Assistant IFC4 sequentiel](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0026-assistant-ifc4-sequentiel.md>)
+- [0027 - Profils IFC4 et import partiel geometrie](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0027-profils-ifc4-et-import-partiel-geometrie.md>)

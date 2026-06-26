@@ -18,6 +18,7 @@ import {
 type RawRow = ImportRowPreview;
 
 const TARGET_FIELD_CATALOG: Record<ImportTargetDomain, ImportTargetFieldDefinition[]> = {
+  "ifc4-analysis": [],
   "spatial-nodes": [
     { key: "type", label: "Type", required: true, description: "Type de noeud spatial." },
     { key: "code", label: "Code", required: true, description: "Code metier du noeud." },

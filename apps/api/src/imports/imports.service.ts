@@ -22,6 +22,7 @@ import {
   type ImportJobStatus,
   type ImportJobDetail,
   type ImportJobPurgeCreatedDataResult,
+  type ImportJobLogEntry,
   type ImportMatchPolicy,
   type ImportJobReport,
   type ImportReportMode,
@@ -56,19 +57,27 @@ import {
   parseImportBuffer,
   validateMappingSet
 } from "./imports-engine";
-import { persistImportSourceFile, persistRawRows, readRawRows, removeImportJobArtifacts } from "./imports-storage";
+import {
+  persistImportSourceFile,
+  persistImportSourcePath,
+  persistRawRows,
+  readRawRows,
+  removeImportJobArtifacts
+} from "./imports-storage";
 import { EquipmentsImportService } from "./equipments-import.service";
 import { ImmobilizationsImportService } from "./immobilizations-import.service";
 
 const JSON_NULL = Prisma.JsonNull;
 
 const IMPORT_TARGET_DOMAIN_TO_DB: Record<ImportTargetDomain, PrismaImportTargetDomain> = {
+  "ifc4-analysis": "IFC4_ANALYSIS",
   "spatial-nodes": "SPATIAL_NODES",
   equipments: "EQUIPMENTS",
   immobilizations: "IMMOBILIZATIONS"
 };
 
 const IMPORT_TARGET_DOMAIN_FROM_DB: Record<PrismaImportTargetDomain, ImportTargetDomain> = {
+  IFC4_ANALYSIS: "ifc4-analysis",
   SPATIAL_NODES: "spatial-nodes",
   EQUIPMENTS: "equipments",
   IMMOBILIZATIONS: "immobilizations"
@@ -711,7 +720,8 @@ export class ImportsService {
       targetDomain: ImportTargetDomain;
       originalFilename: string;
       storedMimeType: string;
-      sourceBuffer: Buffer;
+      sourceBuffer?: Buffer;
+      sourceFilePath?: string;
       headers: string[];
       rawRows: ImportRowPreview[];
       mappings: ImportMappingInput[];
@@ -732,12 +742,14 @@ export class ImportsService {
       }
     });
 
-    const storedFile = await persistImportSourceFile(
-      auth.organizationId,
-      created.id,
-      input.originalFilename,
-      input.sourceBuffer
-    );
+    const storedFile = input.sourceFilePath
+      ? await persistImportSourcePath(auth.organizationId, created.id, input.originalFilename, input.sourceFilePath)
+      : await persistImportSourceFile(
+          auth.organizationId,
+          created.id,
+          input.originalFilename,
+          input.sourceBuffer ?? Buffer.from("")
+        );
     const rawRowsFile = await persistRawRows(auth.organizationId, created.id, input.rawRows);
     const previewRows = input.rawRows.slice(0, 20);
     const sourceSnapshot: ImportSourceSnapshot = {
@@ -799,6 +811,32 @@ export class ImportsService {
       ...job,
       writes
     });
+  }
+
+  async listJobLogs(organizationId: string, jobId: string): Promise<ImportJobLogEntry[]> {
+    await this.getJobOrThrow(organizationId, jobId);
+    const logs = await this.prisma.importJobLog.findMany({
+      where: {
+        organizationId,
+        jobId
+      },
+      orderBy: {
+        createdAt: "asc"
+      }
+    });
+    return logs.map((log) => ({
+      id: log.id,
+      organizationId: log.organizationId,
+      jobId: log.jobId,
+      level: log.level,
+      step: log.step,
+      message: log.message,
+      metadata:
+        log.metadata && typeof log.metadata === "object" && !Array.isArray(log.metadata)
+          ? log.metadata as Record<string, unknown>
+          : null,
+      createdAt: log.createdAt.toISOString()
+    }));
   }
 
   async uploadJob(

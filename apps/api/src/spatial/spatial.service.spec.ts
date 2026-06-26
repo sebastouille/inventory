@@ -156,6 +156,80 @@ describe("SpatialService", () => {
     expect(report.rows[3]?.messages).toContain("OPERATION_CREATE");
   });
 
+  it("marks an unchanged existing spatial node as NO_OP", async () => {
+    const runtimeDir = await mkdtemp(join(tmpdir(), "inventory-spatial-"));
+    cleanupPaths.push(runtimeDir);
+    vi.spyOn(process, "cwd").mockReturnValue(join(runtimeDir, "apps", "api"));
+
+    const rawRows = [
+      {
+        rowIndex: 2,
+        values: {
+          Type: "SITE",
+          Code: "HQ",
+          Libelle: "Site principal",
+          Path: "HQ"
+        }
+      }
+    ];
+
+    const stored = await persistRawRows("org-1", "job-noop", rawRows);
+    const service = new SpatialService(
+      {
+        spatialNode: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: "node-1",
+              type: "SITE",
+              code: "HQ",
+              label: "Site principal",
+              description: null,
+              path: "HQ",
+              parentId: null,
+              externalRef: null,
+              sourceClass: null,
+              sourceMetadata: null,
+              geometrySource: null,
+              geometryMetadata: null,
+              worldCenterX: null,
+              worldCenterY: null,
+              worldCenterZ: null,
+              worldSizeX: null,
+              worldSizeY: null,
+              worldSizeZ: null,
+              isActive: true
+            }
+          ])
+        }
+      } as never,
+      { log: vi.fn() } as never
+    );
+
+    const report = await service.buildImportReport({
+      organizationId: "org-1",
+      mode: "VALIDATE",
+      sourceSnapshot: {
+        sheetNames: ["Feuil1"],
+        selectedSheetName: "Feuil1",
+        headerRowIndex: 1,
+        headers: ["Type", "Code", "Libelle", "Path"],
+        rowCount: rawRows.length,
+        previewRows: rawRows,
+        rawRowsRef: stored.relativePath
+      },
+      mappings: [
+        { sourceColumn: "Type", targetField: "type", transformType: "TRIM" },
+        { sourceColumn: "Code", targetField: "code", transformType: "TRIM" },
+        { sourceColumn: "Libelle", targetField: "label", transformType: "TRIM" },
+        { sourceColumn: "Path", targetField: "path", transformType: "TRIM" }
+      ]
+    });
+
+    expect(report.rows[0]?.status).toBe("NO_OP");
+    expect(report.rows[0]?.messages).toContain("OPERATION_NO_OP");
+    expect(report.summary.simulatedWrites).toBe(0);
+  });
+
   it("rejects a room without resolvable parent", async () => {
     const runtimeDir = await mkdtemp(join(tmpdir(), "inventory-spatial-"));
     cleanupPaths.push(runtimeDir);

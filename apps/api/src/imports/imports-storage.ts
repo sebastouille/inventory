@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ImportRowPreview } from "@inventory/shared";
@@ -33,6 +33,24 @@ export async function persistImportSourceFile(
   };
 }
 
+export async function persistImportSourcePath(
+  organizationId: string,
+  jobId: string,
+  originalFilename: string,
+  sourcePath: string
+) {
+  const extension = extname(originalFilename) || ".bin";
+  const filename = `${sanitizeSegment(jobId)}-${randomUUID()}${extension}`;
+  const relativePath = join(sanitizeSegment(organizationId), sanitizeSegment(jobId), filename);
+  const absolutePath = join(runtimeRoot(), relativePath);
+  await ensureParentDirectory(absolutePath);
+  await copyFile(sourcePath, absolutePath);
+  return {
+    absolutePath,
+    relativePath
+  };
+}
+
 export async function persistRawRows(
   organizationId: string,
   jobId: string,
@@ -53,6 +71,27 @@ export async function readRawRows(rawRowsRef: string) {
   const absolutePath = join(runtimeRoot(), rawRowsRef);
   const content = await readFile(absolutePath, "utf8");
   return JSON.parse(content) as ImportRowPreview[];
+}
+
+export async function persistImportArtifact<T>(organizationId: string, jobId: string, filename: string, payload: T) {
+  const relativePath = join(sanitizeSegment(organizationId), sanitizeSegment(jobId), sanitizeSegment(filename));
+  const absolutePath = join(runtimeRoot(), relativePath);
+  await ensureParentDirectory(absolutePath);
+  await writeFile(absolutePath, JSON.stringify(payload, null, 2), "utf8");
+  return {
+    absolutePath,
+    relativePath
+  };
+}
+
+export async function readImportArtifact<T>(relativePath: string) {
+  const absolutePath = join(runtimeRoot(), relativePath);
+  const content = await readFile(absolutePath, "utf8");
+  return JSON.parse(content) as T;
+}
+
+export function resolveImportArtifact(relativePath: string) {
+  return join(runtimeRoot(), relativePath);
 }
 
 export async function removeImportJobArtifacts(organizationId: string, jobId: string) {

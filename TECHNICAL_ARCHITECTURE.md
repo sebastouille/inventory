@@ -80,6 +80,12 @@
 - le domaine `equipment-movements` expose un controller dedie sous `/api/v1/equipment-movements` et une route de fiche `/api/v1/assets/:assetId/movements`, avec lecture protegee par `assets.read`
 - le domaine `imports` expose un controller transverse sous `/api/v1/imports`
 - le domaine `imports` expose aussi un assistant IFC4 sous `/api/v1/imports/ifc4/*` pour analyser un fichier IFC4, appliquer les referentiels assets candidats, et creer des jobs imports standards a partir de lignes extraites avec overrides optionnels de preparation
+- le domaine `imports` expose maintenant `POST /api/v1/imports/ifc4/analyze-jobs`, `GET /api/v1/imports/ifc4/analyze-jobs/:jobId/result` et `GET /api/v1/imports/jobs/:jobId/logs` pour traiter l analyse IFC4 comme un batch persistant
+- le domaine `imports` expose aussi `POST /api/v1/imports/ifc4/analyze-jobs/quick-parse`, `GET /api/v1/imports/ifc4/analyze-jobs/:jobId/quick-result`, `POST /api/v1/imports/ifc4/analyze-jobs/:jobId/start` et `POST /api/v1/imports/ifc4/analyze-jobs/:jobId/cancel` pour le flux IFC4 gros fichier en deux phases
+- le domaine `imports` expose aussi `GET /api/v1/imports/ifc4/analyze-jobs/:jobId/workflow` et les actions enfants `spatial|equipments / preview|validate|execute|cancel` pour piloter les jobs metier depuis l assistant IFC4
+- les endpoints IFC4 acceptent aussi un profil d analyse : `maxProducts`, `selectedClasses`, `selectedProperties`, `geometryLevel` et `maxShapeParts`
+- les endpoints IFC4 acceptent maintenant `importPolicy=STRICT_ALL_READY|IMPORT_READY_ONLY`; le mode partiel exclut les lignes non importables, puis enrichit le rapport avec des rejets synthetiques expliquant les anomalies
+- le domaine `imports` expose maintenant les profils dedies IFC4 sous `/api/v1/imports/ifc4/profiles` et les diagnostics sous `/api/v1/imports/ifc4/analyze-jobs/:jobId/geometry-diagnostics`
 - le domaine `imports` expose aussi `DELETE /api/v1/imports/jobs/:jobId` pour supprimer un job et nettoyer ses artefacts de stockage local, mais retourne `409 IMPORT_JOB_DELETE_BLOCKED` tant que des creations metier du job existent encore
 - le domaine `imports` expose aussi `POST /api/v1/imports/jobs/:jobId/purge-created-data` pour purger en V1 uniquement les creations `spatial-nodes` d un job execute
 - le domaine `spatial` expose des endpoints sous `/api/v1/spatial/nodes` pour liste, arbre, detail, resume, creation, mise a jour et archivage
@@ -108,6 +114,7 @@
 - `inventory` et `stock-movements` restent des briques separees pour le futur domaine `products` ; ils ne doivent pas etre reutilises comme support des futurs mouvements et campagnes `equipements`
 - le domaine `imports` persiste ses metadonnees en base via `ImportProfile` et `ImportJob`, mais stocke les sources chargees et le cache de lignes sous `.runtime/imports/`
 - le domaine `imports` persiste aussi la provenance des ecritures reelles via `ImportJobWrite`, alimente uniquement pendant `execute`
+- le domaine `imports` persiste les logs de traitement longs via `ImportJobLog`, notamment pour les analyses IFC4 executees par le worker Python
 - `imports` utilise des contrats partages `@inventory/shared` pour les enums, mappings, rapports et listes paginees
 - `imports` supporte trois etapes de traitement en V1 : `preview`, `validate` et `execute`
 - `imports.execute` est maintenant branche en reel pour `spatial-nodes`, `immobilizations` et `equipments`, avec adapters metier dedies et provenance `ImportJobWrite`
@@ -127,11 +134,19 @@
 - `imports.execute` pour `immobilizations` reconcilie par `organizationId + code`, convertit les dates Excel numeriques et trace les creations/mises a jour
 - `imports.execute` pour `equipments` reconcilie par `organizationId + internalCode`, resout la localisation par `currentSpatialPath`, puis `currentSpatialExternalRef`, puis `currentSpatialCode` uniquement si unique
 - `imports.execute` pour `equipments` reutilise `EquipmentMovementsService` avec `source=IMPORT` pour creer les mouvements initiaux et les changements de localisation
-- l assistant IFC4 est une couche de preparation : il parse le STEP IFC4, extrait les proprietes utiles, construit des raw rows, puis appelle le moteur imports existant via un job prepare ; il ne persiste pas directement `SpatialNode` ou `Equipment`
+- l assistant IFC4 est une couche d orchestration : il parse le STEP IFC4, extrait les proprietes utiles, construit des raw rows, cree des jobs enfants prepares, puis pilote `preview`, `validate`, `execute` et `cancel` du moteur imports existant dans un parcours vertical
+- l analyse IFC4 est decouplee de la requete HTTP : le fichier est copie sous `.runtime/imports`, le job `ifc4-analysis` passe en `RUNNING`, le worker Python streame ses logs, puis le resultat complet est stocke comme artefact runtime avant creation eventuelle des jobs metier
+- le parse rapide IFC4 stocke le fichier et met le job en `READY` apres detection des classes ; la previsualisation complete reutilise ce fichier via `start`, sans second upload
+- l analyse IFC4 ecrit aussi des artefacts progressifs NDJSON sous le dossier runtime du job : un flux metadata et un flux geometrie, afin de limiter la perte d information en cas d interruption et de preparer une future lecture streaming
+- une file locale limite les analyses IFC4 simultanees via `IFC_JOB_CONCURRENCY`; la valeur par defaut est `1`
 - les jobs crees par l assistant IFC4 utilisent les domaines existants `spatial-nodes` et `equipments`, ce qui preserve mapping, rapports, provenance `ImportJobWrite`, audit et purge
+- les jobs enfants IFC4 sont retrouves par `options.sourceAnalysisJobId` et exposes dans un workflow agrege avec logs, rapport et statut courant
+- les jobs enfants IFC4 peuvent stocker `options.ifcGeometryExcludedDiagnostics` pour conserver les lignes exclues volontairement du mode partiel et les reinjecter dans le rapport affiche
+- les rapports imports supportent le statut ligne `NO_OP` pour les objets existants sans difference utile ; ces lignes sont affichees mais exclues des ecritures
 - les endpoints IFC4 acceptent `spatialOverrides`, `assetReferenceOverrides` et `equipmentOptions` en multipart pour appliquer les corrections de preparation avant creation du job ou application des referentiels
 - `equipmentOptions.propertyMappings` permet de choisir les proprietes `IfcPropertySingleValue` source des champs equipement (`internalCode`, `numPiece`, `externalRef`) et des referentiels assets ; ces mappings restent ephemeres en V1 et sont appliques lors de `analyze`, `asset-references/apply` et `equipments/create-job`
 - cote web, la preview IFC4 construit une vue derivee en memoire a partir de `spatialNodes`, `equipmentRows` et `assetReferences` : les equipements sont regroupes par `currentSpatialPath`, affiches sous le noeud spatial correspondant, et les lignes sans noeud resolu alimentent une liste d anomalies sans changer les contrats backend
+- cote web, l assistant IFC4 charge les profils dedies, affiche un panneau diagnostics geometrie, filtre les lignes OK/a corriger et telecharge l export CSV des anomalies sans relancer le worker Python
 - `F2-L01` a introduit le rattachement direct `Equipment -> SpatialNode`, les dates metier `receivedAt`, `commissionedAt`, `lastInventoryAt`, les champs texte `numPiece` et `externalRef`, et le retrait de `barcode` / `qrCode` des contrats `assets`
 - `F2-L02` a introduit `Immobilization`, les endpoints CRUD V1, le rattachement optionnel `Equipment -> Immobilization`, et les catalogues d import prepares
 - `F2-L03` a introduit le journal `EquipmentMovement` derive des changements de localisation et d affectation, sans casser le domaine stock `products`
@@ -166,7 +181,14 @@
 ## Worker IfcOpenShell
 
 - le worker Python est appele par `apps/api` via un process local
+- le worker Python est lance via `spawn` pour streamer `stdout` et `stderr`; les lignes JSON emises par `extract_scene.py` deviennent des logs `ImportJobLog`
 - le chemin Python peut etre force par `IFC_GEOMETRY_PYTHON`
+- le process Python actif est reference par `jobId` pour permettre `cancel` sur un job IFC4 `RUNNING`
+- `IFC_GEOMETRY_MAX_PRODUCTS_DEFAULT` fixe la limite par defaut cote serveur, avec `5000` comme fallback
+- `IFC_GEOMETRY_MAX_SHAPE_PARTS` fixe la limite de sous-boites du niveau `INTERMEDIATE`, avec `12` comme fallback
+- `IFC_GEOMETRY_TIMEOUT_MS` fixe le timeout du worker ; le fallback applicatif est `3600000` ms
+- le worker supporte trois niveaux : `NONE` sans geometrie, `MINIMUM` avec bounding boxes, `INTERMEDIATE` avec sous-boites simplifiees limitees
+- le worker filtre les classes IFC avant d appeler `ifcopenshell.geom.create_shape`, pour eviter le cout du type tres large `IfcElement`
 - en Docker, l image API utilise Debian slim et un venv Python dedie pour installer `ifcopenshell`
 - si le worker echoue dans un flux IFC strict, l API retourne une erreur explicite et ne produit pas de placement approximatif
 - le navigateur ne parse jamais le fichier IFC source

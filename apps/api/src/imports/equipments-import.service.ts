@@ -29,9 +29,37 @@ interface EquipmentReferenceState {
   spatialByPath: Map<string, { id: string; path: string; isActive: boolean }>;
   spatialByExternalRef: Map<string, { id: string; externalRef: string | null; isActive: boolean }[]>;
   spatialByCode: Map<string, { id: string; code: string; isActive: boolean }[]>;
-  equipmentsByInternalCode: Map<string, { id: string; internalCode: string; serialNumber: string | null; isDeleted: boolean }>;
+  equipmentsByInternalCode: Map<string, ExistingEquipmentForImport>;
   equipmentsBySerialNumber: Map<string, { id: string; internalCode: string; serialNumber: string | null }>;
 }
+
+type ExistingEquipmentForImport = {
+  id: string;
+  internalCode: string;
+  numPiece: string | null;
+  externalRef: string | null;
+  serialNumber: string | null;
+  equipmentTypeId: string;
+  equipmentModelId: string | null;
+  equipmentStatusId: string;
+  ownerEntityId: string;
+  currentSpatialNodeId: string | null;
+  immobilizationId: string | null;
+  technicalCharacteristics: string | null;
+  geometrySource: string | null;
+  geometryMetadata: Prisma.JsonValue | null;
+  worldCenterX: number | null;
+  worldCenterY: number | null;
+  worldCenterZ: number | null;
+  worldSizeX: number | null;
+  worldSizeY: number | null;
+  worldSizeZ: number | null;
+  notes: string | null;
+  receivedAt: Date | null;
+  commissionedAt: Date | null;
+  lastInventoryAt: Date | null;
+  isDeleted: boolean;
+};
 
 interface PreparedEquipmentRow {
   rowIndex: number;
@@ -68,7 +96,7 @@ interface PreparedEquipmentRow {
 }
 
 interface EquipmentCandidate extends PreparedEquipmentRow {
-  operation: "CREATE" | "UPDATE" | "REJECT";
+  operation: "CREATE" | "UPDATE" | "NO_OP" | "REJECT";
   existingId: string | null;
   equipmentTypeId: string | null;
   equipmentModelId: string | null;
@@ -132,9 +160,27 @@ function parseJsonValue(value: unknown) {
   }
 }
 
-function rowStatus(mode: ImportReportMode, operation: "CREATE" | "UPDATE" | "REJECT", messages: string[]): ImportRowStatus {
+function jsonCompareValue(value: unknown) {
+  if (value == null || value === Prisma.JsonNull) {
+    return "null";
+  }
+  return JSON.stringify(value);
+}
+
+function nullableNumberCompare(left: number | null, right: number | null) {
+  return left === right || (left == null && right == null);
+}
+
+function nullableDateCompare(left: Date | null, right: Date | null) {
+  return (left?.toISOString() ?? null) === (right?.toISOString() ?? null);
+}
+
+function rowStatus(mode: ImportReportMode, operation: "CREATE" | "UPDATE" | "NO_OP" | "REJECT", messages: string[]): ImportRowStatus {
   if (operation === "REJECT") {
     return "REJECTED";
+  }
+  if (operation === "NO_OP") {
+    return "NO_OP";
   }
   if (mode === "EXECUTE") {
     return operation === "CREATE" ? "CREATED" : "UPDATED";
@@ -171,7 +217,33 @@ export class EquipmentsImportService {
       }),
       db.equipment.findMany({
         where: { organizationId },
-        select: { id: true, internalCode: true, serialNumber: true, isDeleted: true }
+        select: {
+          id: true,
+          internalCode: true,
+          numPiece: true,
+          externalRef: true,
+          serialNumber: true,
+          equipmentTypeId: true,
+          equipmentModelId: true,
+          equipmentStatusId: true,
+          ownerEntityId: true,
+          currentSpatialNodeId: true,
+          immobilizationId: true,
+          technicalCharacteristics: true,
+          geometrySource: true,
+          geometryMetadata: true,
+          worldCenterX: true,
+          worldCenterY: true,
+          worldCenterZ: true,
+          worldSizeX: true,
+          worldSizeY: true,
+          worldSizeZ: true,
+          notes: true,
+          receivedAt: true,
+          commissionedAt: true,
+          lastInventoryAt: true,
+          isDeleted: true
+        }
       })
     ]);
 
@@ -295,6 +367,44 @@ export class EquipmentsImportService {
     return null;
   }
 
+  private isEquipmentImportNoOp(
+    existing: ExistingEquipmentForImport,
+    row: PreparedEquipmentRow,
+    resolved: {
+      equipmentTypeId: string | null;
+      equipmentModelId: string | null;
+      equipmentStatusId: string | null;
+      ownerEntityId: string | null;
+      currentSpatialNodeId: string | null;
+      immobilizationId: string | null;
+    }
+  ) {
+    return (
+      existing.numPiece === row.numPiece &&
+      existing.externalRef === row.externalRef &&
+      existing.serialNumber === row.serialNumber &&
+      existing.equipmentTypeId === resolved.equipmentTypeId &&
+      existing.equipmentModelId === resolved.equipmentModelId &&
+      existing.equipmentStatusId === resolved.equipmentStatusId &&
+      existing.ownerEntityId === resolved.ownerEntityId &&
+      existing.currentSpatialNodeId === resolved.currentSpatialNodeId &&
+      existing.immobilizationId === resolved.immobilizationId &&
+      existing.technicalCharacteristics === row.technicalCharacteristics &&
+      existing.notes === row.notes &&
+      nullableDateCompare(existing.receivedAt, row.receivedAt) &&
+      nullableDateCompare(existing.commissionedAt, row.commissionedAt) &&
+      nullableDateCompare(existing.lastInventoryAt, row.lastInventoryAt) &&
+      existing.geometrySource === row.geometrySource &&
+      jsonCompareValue(existing.geometryMetadata) === jsonCompareValue(row.geometryMetadata) &&
+      nullableNumberCompare(existing.worldCenterX, row.worldCenterX) &&
+      nullableNumberCompare(existing.worldCenterY, row.worldCenterY) &&
+      nullableNumberCompare(existing.worldCenterZ, row.worldCenterZ) &&
+      nullableNumberCompare(existing.worldSizeX, row.worldSizeX) &&
+      nullableNumberCompare(existing.worldSizeY, row.worldSizeY) &&
+      nullableNumberCompare(existing.worldSizeZ, row.worldSizeZ)
+    );
+  }
+
   private buildCandidate(
     row: PreparedEquipmentRow,
     references: EquipmentReferenceState,
@@ -344,10 +454,20 @@ export class EquipmentsImportService {
       messages.push("IMMOBILIZATION_INACTIVE");
     }
     const currentSpatialNodeId = this.resolveSpatialNode(row, references, messages);
+    const resolvedIds = {
+      equipmentTypeId: type?.id ?? null,
+      equipmentModelId: model?.id ?? null,
+      equipmentStatusId: status?.id ?? null,
+      ownerEntityId: owner?.id ?? null,
+      currentSpatialNodeId,
+      immobilizationId: immobilization?.id ?? null
+    };
     const operation = messages.length > 0 || !row.internalCode || !type || !status || !owner
       ? "REJECT"
       : existing
-        ? "UPDATE"
+        ? this.isEquipmentImportNoOp(existing, row, resolvedIds)
+          ? "NO_OP"
+          : "UPDATE"
         : "CREATE";
 
     return {
@@ -355,12 +475,7 @@ export class EquipmentsImportService {
       messages,
       operation,
       existingId: existing?.id ?? null,
-      equipmentTypeId: type?.id ?? null,
-      equipmentModelId: model?.id ?? null,
-      equipmentStatusId: status?.id ?? null,
-      ownerEntityId: owner?.id ?? null,
-      currentSpatialNodeId,
-      immobilizationId: immobilization?.id ?? null
+      ...resolvedIds
     };
   }
 
@@ -428,6 +543,7 @@ export class EquipmentsImportService {
       ]
     }));
     const successfulRows = rows.filter((row) => row.status !== "REJECTED");
+    const writableRows = rows.filter((row) => !["REJECTED", "NO_OP", "SKIPPED"].includes(row.status));
     return {
       mode: input.mode,
       targetDomain: "equipments",
@@ -438,7 +554,7 @@ export class EquipmentsImportService {
         rowsValid: successfulRows.length,
         rowsRejected: rows.filter((row) => row.status === "REJECTED").length,
         rowsWithWarnings: rows.filter((row) => row.status === "WARNING").length,
-        simulatedWrites: input.mode === "EXECUTE" ? 0 : successfulRows.length,
+        simulatedWrites: input.mode === "EXECUTE" ? 0 : writableRows.length,
         appliedWrites: 0,
         executionMode: input.mode,
         targetDomain: "equipments"
@@ -513,7 +629,7 @@ export class EquipmentsImportService {
   }) {
     const run = async (tx: Prisma.TransactionClient) => {
       let appliedWrites = 0;
-      for (const row of input.report.rows.filter((item) => item.status !== "REJECTED")) {
+      for (const row of input.report.rows.filter((item) => !["REJECTED", "NO_OP", "SKIPPED"].includes(item.status))) {
         const references = await this.loadReferenceState(tx, input.organizationId);
         const { candidate, data } = this.buildEquipmentData({
           organizationId: input.organizationId,

@@ -1,11 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 export interface IfcExtractBoundingBox {
   min: [number, number, number];
@@ -25,6 +22,7 @@ export interface IfcExtractObject {
   size: [number, number, number] | null;
   hasGeometry: boolean;
   geometryError: string | null;
+  shapeParts?: IfcExtractBoundingBox[];
   childrenCount?: number;
   elevation?: number | null;
 }
@@ -48,10 +46,24 @@ export interface IfcGeometryExtraction {
 }
 
 interface RunExtractionInput {
+  jobId?: string;
   sourcePath: string;
   outputPath?: string;
   timeoutMs?: number;
   maxProducts?: number;
+  selectedClasses?: string[];
+  geometryLevel?: "NONE" | "MINIMUM" | "INTERMEDIATE";
+  maxShapeParts?: number;
+  metadataOutputPath?: string;
+  geometryOutputPath?: string;
+  onLog?: (entry: IfcGeometryWorkerLogEntry) => void | Promise<void>;
+}
+
+export interface IfcGeometryWorkerLogEntry {
+  level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
+  step: string | null;
+  message: string;
+  metadata?: Record<string, unknown>;
 }
 
 function workerPath() {
@@ -66,12 +78,56 @@ function pythonExecutable() {
   return process.env.IFC_GEOMETRY_PYTHON?.trim() || process.env.PYTHON?.trim() || "python";
 }
 
+function intFromEnv(name: string, fallback: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function parseWorkerLine(line: string): IfcGeometryWorkerLogEntry {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const level = typeof parsed.level === "string" && ["DEBUG", "INFO", "WARNING", "ERROR"].includes(parsed.level)
+      ? parsed.level as IfcGeometryWorkerLogEntry["level"]
+      : "INFO";
+    return {
+      level,
+      step: typeof parsed.step === "string" ? parsed.step : null,
+      message: typeof parsed.message === "string" ? parsed.message : line,
+      metadata: parsed.metadata && typeof parsed.metadata === "object" && !Array.isArray(parsed.metadata)
+        ? parsed.metadata as Record<string, unknown>
+        : undefined
+    };
+  } catch {
+    return {
+      level: "INFO",
+      step: null,
+      message: line
+    };
+  }
+}
+
 @Injectable()
 export class IfcGeometryWorker {
   private readonly logger = new Logger(IfcGeometryWorker.name);
+  private readonly activeProcesses = new Map<string, ChildProcessWithoutNullStreams>();
+  private readonly cancelledJobs = new Set<string>();
+
+  cancel(jobId: string) {
+    this.cancelledJobs.add(jobId);
+    const child = this.activeProcesses.get(jobId);
+    if (!child) {
+      return false;
+    }
+    child.kill("SIGTERM");
+    return true;
+  }
 
   async extract(input: RunExtractionInput): Promise<IfcGeometryExtraction> {
     const outputPath = input.outputPath ?? resolve(dirname(input.sourcePath), "ifcopenshell-extract.v1.json");
+    const timeoutMs = input.timeoutMs ?? intFromEnv("IFC_GEOMETRY_TIMEOUT_MS", 60 * 60 * 1000);
+    const maxProducts = input.maxProducts ?? intFromEnv("IFC_GEOMETRY_MAX_PRODUCTS_DEFAULT", intFromEnv("IFC_GEOMETRY_MAX_PRODUCTS", 5000));
+    const geometryLevel = input.geometryLevel ?? "MINIMUM";
+    const maxShapeParts = input.maxShapeParts ?? intFromEnv("IFC_GEOMETRY_MAX_SHAPE_PARTS", 12);
     const args = [
       workerPath(),
       "--input",
@@ -79,27 +135,125 @@ export class IfcGeometryWorker {
       "--output",
       outputPath,
       "--max-products",
-      String(input.maxProducts ?? 20000)
+      String(maxProducts),
+      "--selected-classes",
+      JSON.stringify(input.selectedClasses ?? []),
+      "--geometry-level",
+      geometryLevel,
+      "--max-shape-parts",
+      String(maxShapeParts)
     ];
+    if (input.metadataOutputPath) {
+      args.push("--metadata-output", input.metadataOutputPath);
+    }
+    if (input.geometryOutputPath) {
+      args.push("--geometry-output", input.geometryOutputPath);
+    }
 
-    try {
-      this.logger.log(
-        `Starting IFC geometry extraction source=${input.sourcePath} output=${outputPath} python=${pythonExecutable()} worker=${workerPath()}`
-      );
-      await execFileAsync(pythonExecutable(), args, {
-        timeout: input.timeoutMs ?? 120000,
-        maxBuffer: 1024 * 1024 * 4,
+    this.logger.log(
+      `Starting IFC geometry extraction source=${input.sourcePath} output=${outputPath} python=${pythonExecutable()} worker=${workerPath()} timeoutMs=${timeoutMs} maxProducts=${maxProducts} geometryLevel=${geometryLevel}`
+    );
+
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const child = spawn(pythonExecutable(), args, {
         windowsHide: true
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "IfcOpenShell extraction failed";
-      const stderr = typeof error === "object" && error && "stderr" in error ? String(error.stderr) : "";
-      const stdout = typeof error === "object" && error && "stdout" in error ? String(error.stdout) : "";
-      this.logger.error(
-        `IFC geometry extraction failed source=${input.sourcePath} output=${outputPath} message=${message} stderr=${stderr.slice(0, 2000)} stdout=${stdout.slice(0, 1000)}`
-      );
-      throw new Error(`IfcOpenShell extraction failed: ${message}`);
-    }
+      if (input.jobId) {
+        this.activeProcesses.set(input.jobId, child);
+      }
+      const stderrTail: string[] = [];
+      const stdoutTail: string[] = [];
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      let timedOut = false;
+
+      const pushTail = (target: string[], value: string) => {
+        target.push(value);
+        while (target.join("\n").length > 4000) {
+          target.shift();
+        }
+      };
+
+      const emitLine = (line: string, stream: "stdout" | "stderr") => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return;
+        }
+        pushTail(stream === "stdout" ? stdoutTail : stderrTail, trimmed);
+        const parsed = parseWorkerLine(trimmed);
+        const entry = stream === "stderr" && parsed.level === "INFO"
+          ? { ...parsed, level: "ERROR" as const }
+          : parsed;
+        this.logger.log(`IFC worker ${entry.level} step=${entry.step ?? "-"} message=${entry.message}`);
+        void input.onLog?.(entry);
+      };
+
+      const flushBuffer = (stream: "stdout" | "stderr", final = false) => {
+        const buffer = stream === "stdout" ? stdoutBuffer : stderrBuffer;
+        const lines = buffer.split(/\r?\n/);
+        const completeLines = final ? lines : lines.slice(0, -1);
+        for (const line of completeLines) {
+          emitLine(line, stream);
+        }
+        const remainder = final ? "" : lines.at(-1) ?? "";
+        if (stream === "stdout") {
+          stdoutBuffer = remainder;
+        } else {
+          stderrBuffer = remainder;
+        }
+      };
+
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+      }, timeoutMs);
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutBuffer += chunk.toString("utf8");
+        flushBuffer("stdout");
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrBuffer += chunk.toString("utf8");
+        flushBuffer("stderr");
+      });
+
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        if (input.jobId) {
+          this.activeProcesses.delete(input.jobId);
+        }
+        rejectPromise(error);
+      });
+
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (input.jobId) {
+          this.activeProcesses.delete(input.jobId);
+        }
+        flushBuffer("stdout", true);
+        flushBuffer("stderr", true);
+        if (code === 0) {
+          if (input.jobId) {
+            this.cancelledJobs.delete(input.jobId);
+          }
+          resolvePromise();
+          return;
+        }
+        if (input.jobId && this.cancelledJobs.has(input.jobId)) {
+          this.cancelledJobs.delete(input.jobId);
+          rejectPromise(new Error("IFC geometry extraction cancelled"));
+          return;
+        }
+        const message = timedOut
+          ? `IFC geometry extraction timed out after ${timeoutMs} ms`
+          : `IFC geometry extraction exited with code ${code ?? "null"} signal ${signal ?? "null"}`;
+        this.logger.error(
+          `IFC geometry extraction failed source=${input.sourcePath} output=${outputPath} message=${message} stderr=${stderrTail.join("\n").slice(-2000)} stdout=${stdoutTail.join("\n").slice(-1000)}`
+        );
+        rejectPromise(new Error(`${message}. ${stderrTail.join("\n") || stdoutTail.join("\n")}`));
+      });
+    });
 
     const raw = await readFile(outputPath, "utf8");
     const extraction = JSON.parse(raw) as IfcGeometryExtraction;
