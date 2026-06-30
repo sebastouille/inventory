@@ -255,13 +255,21 @@ function collectIfcClasses(node: IfcClassTreeNode): string[] {
   return (node.children ?? []).flatMap(collectIfcClasses);
 }
 
-function geometryBadgeLabel(status: string | undefined) {
+function isDerivedStoreyGeometry(geometry: Ifc4SpatialPreviewNode["geometry"] | Ifc4EquipmentPreviewRow["geometry"] | undefined | null) {
+  return geometry?.geometrySource === "ifc-storey-derived"
+    || geometry?.geometrySource === "ifc-storey-derived-from-building";
+}
+
+function geometryBadgeLabel(geometryOrStatus: string | Ifc4SpatialPreviewNode["geometry"] | Ifc4EquipmentPreviewRow["geometry"] | undefined | null) {
+  const status = typeof geometryOrStatus === "string" ? geometryOrStatus : geometryOrStatus?.geometryStatus;
+  if (typeof geometryOrStatus !== "string" && isDerivedStoreyGeometry(geometryOrStatus)) return "Etage derive";
   if (status === "READY") return "Geometrie OK";
   if (status === "ERROR") return "Erreur geometrie";
   return "Geometrie manquante";
 }
 
-function geometryBadgeVariant(status: string | undefined) {
+function geometryBadgeVariant(geometryOrStatus: string | Ifc4SpatialPreviewNode["geometry"] | Ifc4EquipmentPreviewRow["geometry"] | undefined | null) {
+  const status = typeof geometryOrStatus === "string" ? geometryOrStatus : geometryOrStatus?.geometryStatus;
   if (status === "READY") return "outline" as const;
   return "destructive" as const;
 }
@@ -2491,9 +2499,10 @@ function ImportsPageContent() {
                           <FormSection title="Diagnostics geometrie IFC" description="Objets importables et objets a corriger avant import." className="p-4" columns={1}>
                             {ifcGeometryDiagnostics ? (
                               <div className="space-y-4">
-                                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
                                   <ReadOnlyField label="Total" value={formatNumber(ifcGeometryDiagnostics.summary.total)} />
                                   <ReadOnlyField label="OK" value={formatNumber(ifcGeometryDiagnostics.summary.ready)} />
+                                  <ReadOnlyField label="Etages derives" value={formatNumber(ifcGeometryDiagnostics.summary.derivedStoreys)} />
                                   <ReadOnlyField label="Manquants" value={formatNumber(ifcGeometryDiagnostics.summary.missing)} />
                                   <ReadOnlyField label="Erreurs" value={formatNumber(ifcGeometryDiagnostics.summary.errors)} />
                                   <ReadOnlyField label="Parents invalides" value={formatNumber(ifcGeometryDiagnostics.summary.blockedByParent)} />
@@ -2643,8 +2652,8 @@ function ImportsPageContent() {
                                         </p>
                                       </div>
                                       <div className="flex flex-wrap items-center gap-3 xl:justify-end">
-                                        <Badge variant={geometryBadgeVariant(item.geometry?.geometryStatus)}>
-                                          {geometryBadgeLabel(item.geometry?.geometryStatus)}
+                                        <Badge variant={geometryBadgeVariant(item.geometry)}>
+                                          {geometryBadgeLabel(item.geometry)}
                                         </Badge>
                                         <SpatialNodeChip type={effectiveType} label={effectiveType} settings={displaySettings} />
                                         <Select
@@ -2678,7 +2687,7 @@ function ImportsPageContent() {
                                           <ReadOnlyField label="Classe source" value={item.sourceClass ?? "-"} />
                                           <ReadOnlyField label="Chemin" value={item.path} />
                                           <ReadOnlyField label="Reference externe" value={item.externalRef ?? "-"} />
-                                          <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(item.geometry?.geometryStatus)} />
+                                          <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(item.geometry)} />
                                           <ReadOnlyField label="Dimensions XYZ" value={geometrySizeLabel(item.geometry)} />
                                           <ReadOnlyField label="Message geometrie" value={item.geometry?.geometryMessage ?? "-"} />
                                           <ReadOnlyField label="GlobalId" value={item.externalRef ?? "-"} />
@@ -3077,8 +3086,8 @@ function ImportsPageContent() {
                                       <Badge variant={item.isSpatiallyAttached ? "outline" : "destructive"}>
                                         {item.isSpatiallyAttached ? "Dans l arbre" : "Anomalie"}
                                       </Badge>
-                                      <Badge variant={geometryBadgeVariant(item.geometry?.geometryStatus)}>
-                                        {geometryBadgeLabel(item.geometry?.geometryStatus)}
+                                      <Badge variant={geometryBadgeVariant(item.geometry)}>
+                                        {geometryBadgeLabel(item.geometry)}
                                       </Badge>
                                     </div>
                                   )
@@ -3094,7 +3103,7 @@ function ImportsPageContent() {
                                   <p>Reference externe : {item.externalRef ?? "-"}</p>
                                   <p>GlobalId IFC : {item.sourceGlobalId ?? "-"}</p>
                                   <p>Classe IFC : {item.sourceClass}</p>
-                                  <p>Geometrie : {geometryBadgeLabel(item.geometry?.geometryStatus)}</p>
+                                  <p>Geometrie : {geometryBadgeLabel(item.geometry)}</p>
                                   <p>Message geometrie : {item.geometry?.geometryMessage ?? "-"}</p>
                                   <p>Dimensions XYZ : {geometrySizeLabel(item.geometry)}</p>
                                   <p>Statut / proprietaire : {compactReferenceValue(item.classification.status)} / {compactReferenceValue(item.classification.owner)}</p>
@@ -3894,7 +3903,7 @@ function ImportsPageContent() {
                 <ReadOnlyField label="Reference spatiale externe" value={selectedIfcEquipment.currentSpatialExternalRef ?? "-"} />
                 <ReadOnlyField label="Classe IFC" value={selectedIfcEquipment.sourceClass} />
                 <ReadOnlyField label="GlobalId IFC" value={selectedIfcEquipment.sourceGlobalId ?? "-"} />
-                <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(selectedIfcEquipment.geometry?.geometryStatus)} />
+                <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(selectedIfcEquipment.geometry)} />
                 <ReadOnlyField label="Message geometrie" value={selectedIfcEquipment.geometry?.geometryMessage ?? "-"} />
                 <ReadOnlyField label="Dimensions XYZ" value={geometrySizeLabel(selectedIfcEquipment.geometry)} />
                 <ReadOnlyField label="Bbox min" value={selectedIfcEquipment.geometry?.worldBbox ? `${selectedIfcEquipment.geometry.worldBbox.min.x}; ${selectedIfcEquipment.geometry.worldBbox.min.y}; ${selectedIfcEquipment.geometry.worldBbox.min.z}` : "-"} />

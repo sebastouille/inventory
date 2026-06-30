@@ -260,7 +260,14 @@ export function buildIfcOpenShellBim3dScene(input: BuildIfcSceneInput): Bim3dSce
         spatialNodeId: nodeId,
         elevation: bbox.min.y,
         bbox,
-        sourceGlobalId: storey.globalId
+        sourceGlobalId: storey.globalId,
+        geometrySource: "ifcopenshell-bounding-boxes",
+        labelPosition: {
+          x: bbox.min.x,
+          y: bbox.max.y + 0.9,
+          z: bbox.min.z
+        },
+        derived: false
       });
     }
   }

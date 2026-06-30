@@ -1,6 +1,6 @@
 ---
 name: project-doc-governor
-description: Imposer un workflow docs-as-code local au repository pour la planification, l'architecture, l'implementation de fonctionnalites, les migrations, la correction de bugs, et la gestion du backlog. Utiliser quand Codex doit creer ou mettre a jour une documentation Markdown versionnee avant et apres implementation, capturer les plans et les reponses utilisateur dans `docs/steps/`, enregistrer les decisions d'architecture dans `docs/adr/`, mettre a jour les specifications racine, ou creer des artefacts backlog et bug.
+description: Imposer un workflow docs-as-code local au repository pour la planification, l'architecture, l'implementation de fonctionnalites, les migrations, la correction de bugs, et la gestion du backlog. Utiliser quand Codex doit creer ou mettre a jour une documentation Markdown versionnee avant et apres implementation, capturer les plans et les reponses utilisateur dans `docs/steps/`, enregistrer les decisions d'architecture dans `docs/adr/`, mettre a jour les specifications racine, ou creer des artefacts backlog et bug. Ne pas utiliser pour une petite retouche d affichage sans impact metier, API, securite, donnees, architecture ou dette a suivre.
 ---
 
 # Gouvernance documentaire projet
@@ -8,6 +8,8 @@ description: Imposer un workflow docs-as-code local au repository pour la planif
 ## Vue d'ensemble
 
 Utiliser cette skill pour faire de la documentation une sortie obligatoire du travail d'implementation dans ce repository. Traiter les plans, les reponses utilisateur, les decisions, les changements d'architecture, et le travail differe comme des artefacts versionnes de premier niveau.
+
+Exception : ne pas declencher ce workflow pour une petite modification d affichage ou de libelle qui ne change pas le comportement metier, les contrats API, le schema de base, la securite, l architecture, les tests attendus, ou le backlog. Exemples exclus : deplacer un badge, retirer une carte purement informative, ajuster un alignement, modifier un texte d aide court.
 
 ## Workflow
 
@@ -31,7 +33,7 @@ Puis inspecter :
 
 ### 2. Avant implementation, creer ou mettre a jour un dossier d'etape
 
-Pour toute demande non triviale :
+Pour toute demande non triviale, hors micro-ajustement visuel sans impact metier :
 
 - creer un nouveau fichier dans `docs/steps/` avec `scripts/docs/new-step.ps1`, ou mettre a jour le fichier actif ;
 - capturer l'objectif, le perimetre, le plan, les hypotheses, les questions ouvertes, les zones impactees, les tests, et les criteres d'acceptation ;

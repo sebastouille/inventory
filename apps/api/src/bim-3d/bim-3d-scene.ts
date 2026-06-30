@@ -403,15 +403,21 @@ export function buildPersistedGeometryBim3dScene(input: BuildBim3dSceneInput): B
     };
   });
 
-  const sceneNodes: Bim3dSceneNode[] = nodes.filter(hasPersistedGeometry).map(({ isIfcSource: _isIfcSource, ...node }) => ({
-    ...node,
-    bbox: boxFromCenterAndSize(node.worldCenter!, node.worldSize!),
-    ageSummary: nodeAgeSummaries.get(node.id) ?? emptyAgeSummary(),
-    geometrySource: "ifc-persisted-geometry",
-    geometryMetadata: node.geometryMetadata && typeof node.geometryMetadata === "object"
+  const sceneNodes: Bim3dSceneNode[] = nodes.filter(hasPersistedGeometry).map(({ isIfcSource: _isIfcSource, ...node }) => {
+    const geometryMetadata = node.geometryMetadata && typeof node.geometryMetadata === "object"
       ? (node.geometryMetadata as Record<string, unknown>)
-      : null
-  }));
+      : null;
+    const geometrySource = node.geometrySource === "ifc-storey-derived" || node.geometrySource === "ifc-storey-derived-from-building"
+      ? "ifc-storey-derived"
+      : "ifc-persisted-geometry";
+    return {
+      ...node,
+      bbox: boxFromCenterAndSize(node.worldCenter!, node.worldSize!),
+      ageSummary: nodeAgeSummaries.get(node.id) ?? emptyAgeSummary(),
+      geometrySource,
+      geometryMetadata
+    };
+  });
 
   return {
     version: "1.0",
@@ -438,7 +444,14 @@ export function buildPersistedGeometryBim3dScene(input: BuildBim3dSceneInput): B
         spatialNodeId: node.id,
         elevation: node.bbox.min.y,
         bbox: node.bbox,
-        sourceGlobalId: node.sourceGlobalId
+        sourceGlobalId: node.sourceGlobalId,
+        geometrySource: node.geometrySource,
+        labelPosition: {
+          x: node.bbox.min.x,
+          y: node.bbox.max.y + 0.9,
+          z: node.bbox.min.z
+        },
+        derived: node.geometrySource === "ifc-storey-derived"
       })),
     materials: {
       node: NODE_COLORS,

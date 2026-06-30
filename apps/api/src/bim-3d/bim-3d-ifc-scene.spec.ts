@@ -94,6 +94,8 @@ describe("bim 3d ifcopenshell scene", () => {
     expect(scene.metadata.extractionEngine).toBe("ifcopenshell-python");
     expect(scene.metadata.geometrySource).toBe("ifcopenshell-bounding-boxes");
     expect(scene.floorGuides).toHaveLength(1);
+    expect(scene.floorGuides?.[0]?.geometrySource).toBe("ifcopenshell-bounding-boxes");
+    expect(scene.floorGuides?.[0]?.labelPosition).toBeTruthy();
     expect(scene.nodes).toHaveLength(2);
     expect(scene.equipments).toHaveLength(1);
     expect(scene.equipments[0]?.position.x).toBeCloseTo(-3);

@@ -402,6 +402,108 @@ export function AssetEditorPage({ assetId }: AssetEditorPageProps) {
     [allAssets, allowedTargetFamilyIds, assetId]
   );
 
+  const assetReadOnlySections = asset ? (
+    <>
+      <PageSection title="Resume courant" description="Etat et metadonnees de l equipement.">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <ReadOnlyField label="Creation" value={formatDate(asset.createdAt)} />
+          <ReadOnlyField label="Mise a jour" value={formatDate(asset.updatedAt)} />
+          <ReadOnlyField label="Num piece" value={asset.numPiece ?? "-"} />
+          <ReadOnlyField label="Reference externe" value={asset.externalRef ?? "-"} />
+          <ReadOnlyField label="Famille" value={asset.equipmentType.familyLabel} />
+          <ReadOnlyField label="Sous-famille" value={asset.equipmentType.subfamilyLabel} />
+          <ReadOnlyField
+            label="Type"
+            value={buildTypePath(selectedType, subfamiliesById, familiesById, categoriesById)}
+          />
+          <ReadOnlyField label="Modele" value={buildModelPath(selectedModel ?? null)} />
+          <ReadOnlyField label="Statut" value={selectedStatus?.label ?? asset.equipmentStatus.label} />
+          <ReadOnlyField label="Proprietaire" value={selectedOwner?.label ?? asset.ownerEntity.label} />
+          <ReadOnlyField
+            label="Immobilisation"
+            value={
+              selectedImmobilization
+                ? buildImmobilizationLabel(selectedImmobilization)
+                : asset.immobilizationCode
+                  ? `${asset.immobilizationCode} - ${asset.immobilizationLabel ?? ""}`.trim()
+                  : "-"
+            }
+          />
+          <ReadOnlyField label="Localisation courante" value={asset.currentSpatialLabel ?? "-"} />
+          <ReadOnlyField label="Reception" value={asset.receivedAt ? formatDate(asset.receivedAt) : "-"} />
+          <ReadOnlyField
+            label="Mise en service"
+            value={asset.commissionedAt ? formatDate(asset.commissionedAt) : "-"}
+          />
+          <ReadOnlyField
+            label="Dernier inventaire"
+            value={asset.lastInventoryAt ? formatDate(asset.lastInventoryAt) : "-"}
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Etat</p>
+            <div className="flex min-h-10 items-center rounded-xl border border-border/60 bg-background/70 px-3 py-2">
+              <StatusBadge
+                status={asset.isDeleted ? "inactive" : "active"}
+                label={asset.isDeleted ? "Archive" : "Actif"}
+              />
+            </div>
+          </div>
+        </div>
+      </PageSection>
+
+      <PageSection
+        title="Mouvements equipement"
+        description="Timeline metier derivee des changements de localisation et d affectation."
+      >
+        <div className="space-y-3">
+          {movements.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Aucun mouvement metier enregistre.</p>
+          ) : (
+            movements.map((movement) => {
+              const values = movementBeforeAfter(movement);
+              return (
+                <div key={movement.id} className="rounded-xl border border-border/60 bg-background/70 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-foreground">{movementTypeLabel(movement.movementType)}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {formatDateTime(movement.createdAt)}
+                        {movement.createdByEmail ? ` - ${movement.createdByEmail}` : ""}
+                      </p>
+                    </div>
+                    <StatusBadge status="neutral" label={movementSourceLabel(movement.source)} />
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <ReadOnlyField label="Avant" value={values.before} />
+                    <ReadOnlyField label="Apres" value={values.after} />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </PageSection>
+
+      <PageSection title="Historique" description="Timeline issue du journal d audit.">
+        <div className="space-y-3">
+          {history.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Aucun evenement d historique.</p>
+          ) : (
+            history.map((entry) => (
+              <div key={entry.id} className="rounded-xl border border-border/60 bg-background/70 p-4">
+                <p className="font-medium text-foreground">{entry.action}</p>
+                <p className="text-sm text-muted-foreground">
+                  {formatDateTime(entry.createdAt)}
+                  {entry.userEmail ? ` - ${entry.userEmail}` : ""}
+                </p>
+              </div>
+            ))
+          )}
+        </div>
+      </PageSection>
+    </>
+  ) : null;
+
   if (!token) {
     return <WebAuthScreen />;
   }
@@ -421,6 +523,7 @@ export function AssetEditorPage({ assetId }: AssetEditorPageProps) {
         sections={
           <>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
+            {assetReadOnlySections}
 
             <FormSection
               title="Identite"
@@ -698,112 +801,6 @@ export function AssetEditorPage({ assetId }: AssetEditorPageProps) {
                 onChange={(assignments) => setForm((current) => ({ ...current, assignments }))}
               />
             </FormSection>
-
-            {asset ? (
-              <>
-                <PageSection title="Resume courant" description="Etat et metadonnees de l equipement.">
-                  <div className="grid gap-4 lg:grid-cols-2">
-                    <ReadOnlyField label="Creation" value={formatDate(asset.createdAt)} />
-                    <ReadOnlyField label="Mise a jour" value={formatDate(asset.updatedAt)} />
-                    <ReadOnlyField label="Num piece" value={asset.numPiece ?? "-"} />
-                    <ReadOnlyField label="Reference externe" value={asset.externalRef ?? "-"} />
-                    <ReadOnlyField label="Famille" value={asset.equipmentType.familyLabel} />
-                    <ReadOnlyField label="Sous-famille" value={asset.equipmentType.subfamilyLabel} />
-                    <ReadOnlyField
-                      label="Type"
-                      value={buildTypePath(selectedType, subfamiliesById, familiesById, categoriesById)}
-                    />
-                    <ReadOnlyField label="Modele" value={buildModelPath(selectedModel ?? null)} />
-                    <ReadOnlyField label="Statut" value={selectedStatus?.label ?? asset.equipmentStatus.label} />
-                    <ReadOnlyField label="Proprietaire" value={selectedOwner?.label ?? asset.ownerEntity.label} />
-                    <ReadOnlyField
-                      label="Immobilisation"
-                      value={
-                        selectedImmobilization
-                          ? buildImmobilizationLabel(selectedImmobilization)
-                          : asset.immobilizationCode
-                            ? `${asset.immobilizationCode} - ${asset.immobilizationLabel ?? ""}`.trim()
-                            : "-"
-                      }
-                    />
-                    <ReadOnlyField label="Localisation courante" value={asset.currentSpatialLabel ?? "-"} />
-                    <ReadOnlyField label="Reception" value={asset.receivedAt ? formatDate(asset.receivedAt) : "-"} />
-                    <ReadOnlyField
-                      label="Mise en service"
-                      value={asset.commissionedAt ? formatDate(asset.commissionedAt) : "-"}
-                    />
-                    <ReadOnlyField
-                      label="Dernier inventaire"
-                      value={asset.lastInventoryAt ? formatDate(asset.lastInventoryAt) : "-"}
-                    />
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                        Etat
-                      </p>
-                      <div className="flex min-h-10 items-center rounded-xl border border-border/60 bg-background/70 px-3 py-2">
-                        <StatusBadge
-                          status={asset.isDeleted ? "inactive" : "active"}
-                          label={asset.isDeleted ? "Archive" : "Actif"}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </PageSection>
-
-                <PageSection
-                  title="Mouvements equipement"
-                  description="Timeline metier derivee des changements de localisation et d affectation."
-                >
-                  <div className="space-y-3">
-                    {movements.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Aucun mouvement metier enregistre.</p>
-                    ) : (
-                      movements.map((movement) => {
-                        const values = movementBeforeAfter(movement);
-                        return (
-                          <div key={movement.id} className="rounded-xl border border-border/60 bg-background/70 p-4">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                              <div>
-                                <p className="font-medium text-foreground">
-                                  {movementTypeLabel(movement.movementType)}
-                                </p>
-                                <p className="text-sm text-muted-foreground">
-                                  {formatDateTime(movement.createdAt)}
-                                  {movement.createdByEmail ? ` - ${movement.createdByEmail}` : ""}
-                                </p>
-                              </div>
-                              <StatusBadge status="neutral" label={movementSourceLabel(movement.source)} />
-                            </div>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                              <ReadOnlyField label="Avant" value={values.before} />
-                              <ReadOnlyField label="Apres" value={values.after} />
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </PageSection>
-
-                <PageSection title="Historique" description="Timeline issue du journal d audit.">
-                  <div className="space-y-3">
-                    {history.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">Aucun evenement d historique.</p>
-                    ) : (
-                      history.map((entry) => (
-                        <div key={entry.id} className="rounded-xl border border-border/60 bg-background/70 p-4">
-                          <p className="font-medium text-foreground">{entry.action}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatDateTime(entry.createdAt)}
-                            {entry.userEmail ? ` - ${entry.userEmail}` : ""}
-                          </p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </PageSection>
-              </>
-            ) : null}
           </>
         }
         primaryActions={

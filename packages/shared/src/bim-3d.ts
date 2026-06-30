@@ -26,6 +26,8 @@ export interface Bim3dBoundingBox {
 
 export type Bim3dGeometrySource =
   | "ifcopenshell-bounding-boxes"
+  | "ifc-storey-derived"
+  | "ifc-storey-derived-from-building"
   | "ifc-persisted-geometry"
   | "ifc-bounding-boxes"
   | "mixed-ifc-fallback"
@@ -39,6 +41,9 @@ export interface Bim3dFloorGuide {
   elevation: number;
   bbox: Bim3dBoundingBox;
   sourceGlobalId: string | null;
+  geometrySource?: Bim3dGeometrySource | null;
+  labelPosition?: Bim3dVector3 | null;
+  derived?: boolean;
 }
 
 export interface Bim3dAgeSummary {

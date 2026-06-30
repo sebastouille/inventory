@@ -117,6 +117,7 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
   - `worldSizeX`, `worldSizeY`, `worldSizeZ`
   - `geometryUpdatedAt`
 - les dimensions stockees sont des bounding boxes en metres et non des mesures certifiees
+- pour un `SpatialNode` de type `FLOOR` issu de `IFCBUILDINGSTOREY`, `geometrySource=ifc-storey-derived-from-building` signifie que l emprise X/Z est reprise du batiment parent avec une epaisseur visuelle fixe ; `geometrySource=ifc-storey-derived` signifie que l emprise est calculee depuis les enfants geometriques avec une marge
 - une ligne IFC sans geometrie exploitable ne doit pas effacer une geometrie deja persistante
 - les maillages lourds IFC ne sont pas stockes en base en V1
 - le catalogue import `immobilizations` expose les champs comptables V1 et son execution reelle cree ou met a jour `Immobilization` par `organizationId + code`

@@ -219,7 +219,7 @@ describe("Ifc4AssistantService", () => {
     );
 
     const diagnostics = await (service as unknown as {
-      buildGeometryDiagnostics: (organizationId: string, analysis: typeof analysis) => Promise<{
+      buildGeometryDiagnostics: (organizationId: string, analysis: unknown) => Promise<{
         items: Array<{ path: string | null; status: string; reasonCode: string | null; importable: boolean }>;
       }>;
     }).buildGeometryDiagnostics("org-1", analysis);
@@ -228,6 +228,107 @@ describe("Ifc4AssistantService", () => {
     expect(building?.status).toBe("PARENT_INVALID");
     expect(building?.reasonCode).toBe("PARENT_GEOMETRY_INVALID");
     expect(building?.importable).toBe(false);
+  });
+
+  it("derives IFCBUILDINGSTOREY geometry from the parent building and keeps descendants importable", async () => {
+    const geometryWorker = buildGeometryWorkerMock();
+    geometryWorker.extract.mockResolvedValueOnce({
+      ...await geometryWorker.extract(),
+      spatialObjects: [
+        {
+          globalId: "SITEGUID",
+          ifcEntityId: 1,
+          ifcClass: "IfcSite",
+          name: "Site principal",
+          description: null,
+          parentGlobalId: null,
+          storeyGlobalId: null,
+          bbox: { min: [0, 0, 0], max: [20, 4, 20] },
+          center: [10, 2, 10],
+          size: [20, 4, 20],
+          hasGeometry: true,
+          geometryError: null
+        },
+        {
+          globalId: "BLDGID",
+          ifcEntityId: 2,
+          ifcClass: "IfcBuilding",
+          name: "Batiment A",
+          description: null,
+          parentGlobalId: "SITEGUID",
+          storeyGlobalId: null,
+          bbox: { min: [0, 0, 0], max: [20, 4, 20] },
+          center: [10, 2, 10],
+          size: [20, 4, 20],
+          hasGeometry: true,
+          geometryError: null
+        },
+        {
+          globalId: "FLOORID",
+          ifcEntityId: 3,
+          ifcClass: "IfcBuildingStorey",
+          name: "R+1",
+          description: null,
+          parentGlobalId: "BLDGID",
+          storeyGlobalId: null,
+          bbox: null,
+          center: null,
+          size: null,
+          hasGeometry: false,
+          geometryError: null
+        }
+      ],
+      products: [
+        {
+          globalId: "FURNGUID",
+          ifcEntityId: 4,
+          ifcClass: "IfcFurniture",
+          name: "Bureau 1",
+          description: "Bureau",
+          parentGlobalId: null,
+          storeyGlobalId: "FLOORID",
+          bbox: { min: [1, 1, 2], max: [3, 2, 5] },
+          center: [2, 1.5, 3.5],
+          size: [2, 1, 3],
+          hasGeometry: true,
+          geometryError: null
+        }
+      ]
+    });
+    const service = new Ifc4AssistantService(
+      buildPrismaMock() as never,
+      { createPreparedJob: vi.fn() } as never,
+      { log: vi.fn() } as never,
+      geometryWorker as never
+    );
+
+    const analysis = await service.analyze(
+      { organizationId: "org-1" } as never,
+      { originalname: "sample.ifc", buffer: Buffer.from(IFC_SAMPLE, "utf8") }
+    );
+
+    const floor = analysis.spatialNodes.find((node) => node.sourceClass === "IFCBUILDINGSTOREY");
+    expect(floor?.geometry?.geometryStatus).toBe("READY");
+    expect(floor?.geometry?.geometrySource).toBe("ifc-storey-derived-from-building");
+    expect(floor?.geometry?.geometryMessage).toContain("batiment parent");
+    expect(floor?.geometry?.worldSize?.x).toBeCloseTo(20);
+    expect(floor?.geometry?.worldSize?.y).toBeCloseTo(0.08);
+    expect(floor?.geometry?.worldSize?.z).toBeCloseTo(20);
+
+    const diagnostics = await (service as unknown as {
+      buildGeometryDiagnostics: (organizationId: string, analysis: unknown) => Promise<{
+        summary: { derivedStoreys: number };
+        items: Array<{ path: string | null; status: string; reasonCode: string | null; importable: boolean }>;
+      }>;
+    }).buildGeometryDiagnostics("org-1", analysis);
+
+    const floorDiagnostic = diagnostics.items.find((item) => item.path === floor?.path);
+    const childDiagnostic = diagnostics.items.find((item) => item.path?.startsWith(`${floor?.path}/`));
+    expect(diagnostics.summary.derivedStoreys).toBe(1);
+    expect(floorDiagnostic?.status).toBe("DERIVED");
+    expect(floorDiagnostic?.reasonCode).toBe("STOREY_GEOMETRY_DERIVED");
+    expect(floorDiagnostic?.importable).toBe(true);
+    expect(childDiagnostic?.reasonCode).not.toBe("PARENT_GEOMETRY_INVALID");
   });
 
   it("creates a partial spatial job with only importable rows when requested", async () => {

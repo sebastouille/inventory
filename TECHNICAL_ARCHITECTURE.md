@@ -29,6 +29,7 @@
 - theming dual light/dark avec tokens semantiques
 - PWA `apps/web` avec `manifest.webmanifest`, icones applicatives et ergonomie mobile
 - l execution terrain web utilise maintenant un controleur de scan unique : camera via `BarcodeDetector` si disponible, fallback `@zxing/browser`, douchette Bluetooth en mode clavier HID, saisie manuelle, parsing partage et file IndexedDB par campagne
+- avant persistence, `inventory-campaigns` resout les references scannees en UUID applicatifs : noeud par UUID, code, chemin ou reference externe ; equipement par code interne, reference externe ou numero de piece
 - `POST /api/v1/inventory-campaigns/:id/complete-node` permet de terminer un noeud actif et de generer les anomalies `MISSING` de facon idempotente
 - documentation versionnee en Markdown a la racine et sous `docs/`
 - la regeneration Prisma locale passe par `scripts/prisma-generate-safe.ps1`, qui refuse `PRISMA_GENERATE_NO_ENGINE` et verifie que le client genere embarque bien l engine local Windows/Linux attendu pour `postgresql://`
@@ -99,9 +100,10 @@
 - `bim-3d` stocke les fichiers scene sous `.runtime/bim-3d/` et conserve seulement les metadonnees dans PostgreSQL
 - `bim-3d` stocke aussi le fichier IFC source et le JSON technique d extraction sous `.runtime/bim-3d/`, puis transforme ces donnees en `scene.v1.json`
 - les imports IFC4 appellent aussi le worker IfcOpenShell pendant l analyse, rapprochent la geometrie par `GlobalId`, et persistent les champs de geometrie sur `SpatialNode` et `Equipment`
+- les imports IFC4 traitent `IFCBUILDINGSTOREY` comme un conteneur spatial particulier : si aucune bbox brute n existe, l assistant derive une emprise depuis le batiment parent geometrique avec `geometrySource=ifc-storey-derived-from-building`, sinon depuis les enfants geometriques avec `geometrySource=ifc-storey-derived`, et garde les autres objets en mode strict
 - la generation standard `bim-3d` refuse les donnees sans geometrie persistante avec `BIM3D_GEOMETRY_MISSING` ou `BIM3D_PARTIAL_GEOMETRY`
 - le viewer `apps/web/app/spatial-3d/page.tsx` utilise `three` et `OrbitControls`, avec une scene client-only composee de boites et cubes
-- le viewer 3D affiche les reperes d etage issus de la scene, et distingue `Coordonnees IFC`, `Mode mixte` et `Fallback spatial`
+- le viewer 3D affiche les reperes d etage issus de la scene sous forme de plateaux XZ semi-transparents, bordures et labels `Sprite` via `CanvasTexture`, et distingue `Coordonnees IFC`, `Mode mixte` et `Fallback spatial`
 - le domaine `spatial` expose aussi `GET /api/v1/spatial/nodes/display-settings` pour fournir la configuration visuelle aux ecrans operateur et admin sans dependre d un droit organisationnel
 - le domaine `organizations` expose maintenant `PATCH /api/v1/organizations/current/settings` pour mettre a jour en une seule operation les styles spatiaux et la politique IAM spatiale
 - `IamAccessScope` reste l objet IAM assigne aux utilisateurs, mais il est maintenant synchronise depuis `SpatialNode` via `spatialNodeId`
@@ -191,6 +193,7 @@
 - le worker filtre les classes IFC avant d appeler `ifcopenshell.geom.create_shape`, pour eviter le cout du type tres large `IfcElement`
 - en Docker, l image API utilise Debian slim et un venv Python dedie pour installer `ifcopenshell`
 - si le worker echoue dans un flux IFC strict, l API retourne une erreur explicite et ne produit pas de placement approximatif
+- l exception documentee au flux strict concerne uniquement les `IFCBUILDINGSTOREY` : une geometrie derivee depuis les enfants est acceptee si elle est marquee explicitement comme telle
 - le navigateur ne parse jamais le fichier IFC source
 
 ## Regles de mise a jour

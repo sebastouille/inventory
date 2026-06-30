@@ -364,7 +364,7 @@ export interface Ifc4EquipmentOptions {
 
 export interface Ifc4GeometryDiagnosticItem {
   domain: "spatial" | "equipment";
-  status: "READY" | "MISSING" | "ERROR" | "PARENT_INVALID" | "SPATIAL_TARGET_INVALID";
+  status: "READY" | "DERIVED" | "MISSING" | "ERROR" | "PARENT_INVALID" | "SPATIAL_TARGET_INVALID";
   importable: boolean;
   reasonCode: string | null;
   label: string;
@@ -386,6 +386,7 @@ export interface Ifc4GeometryDiagnosticsResponse {
     ready: number;
     missing: number;
     errors: number;
+    derivedStoreys: number;
     blockedByParent: number;
     blockedBySpatialTarget: number;
     importable: number;

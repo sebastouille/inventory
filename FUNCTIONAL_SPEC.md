@@ -58,6 +58,7 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - la V1 campagnes terrain equipements est maintenant separee du domaine stock `inventory` : une campagne definit un perimetre spatial, fige les equipements attendus a l ouverture, collecte des observations, puis genere des anomalies
 - `MATCH` reste un resultat d observation conforme ; les anomalies V1 sont `WRONG_LOCATION`, `UNKNOWN_CODE`, `MISSING`, `DUPLICATE` et `OUT_OF_SCOPE`
 - la V1 execution terrain est mobile-first avec scan camera prioritaire via `BarcodeDetector` ou `@zxing/browser`, douchette Bluetooth HID en acceleration, saisie manuelle en secours, file IndexedDB par campagne et synchronisation idempotente
+- la saisie manuelle terrain accepte maintenant les references metier : un noeud peut etre resolu par UUID, code, chemin ou reference externe, et un equipement par code interne, reference externe ou numero de piece
 - la fin de piece terrain genere maintenant les anomalies `MISSING` du noeud actif sans attendre la cloture complete de la campagne
 - la V1 corrections superviseur permet `LOCATION_CHANGE`, `STATUS_CHANGE`, `RELABEL_REQUEST` et `MANUAL_IMMOBILIZATION_LINK` ; le changement de localisation cree aussi un `EquipmentMovement`
 - la V1 rapprochement comptable est manuelle : l ecran propose des candidats informatifs mais ne rattache jamais automatiquement une immobilisation a un equipement
@@ -81,6 +82,7 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - l assistant IFC4 dispose maintenant de profils dedies sauvegardables par organisation, separes des profils CSV/XLSX, pour reutiliser classes, proprietes, mappings, overrides, niveau de geometrie et politique d import
 - l assistant IFC4 affiche maintenant un panneau `Diagnostics geometrie IFC` avec compteurs, filtres `Tous`, `OK`, `A corriger`, detail GlobalId/classe/path/bbox/dimensions/message et export CSV des anomalies
 - l assistant IFC4 propose maintenant une politique explicite `Importer uniquement les lignes OK`; dans ce mode les objets non importables sont exclus du job, inscrits dans le rapport et jamais positionnes par approximation
+- les `IFCBUILDINGSTOREY` sans geometrie propre peuvent maintenant etre acceptes comme etages derives : l assistant utilise d abord l emprise X/Z du batiment parent geometrique, sinon l emprise des enfants geometriques ; ils restent signales comme `Etage derive` et ne masquent pas les autres erreurs IFC
 - les rapports d import spatial et equipements distinguent maintenant les lignes `NO_OP`, c est a dire les objets deja presents et strictement identiques, afin d eviter des mises a jour inutiles
 - l assistant IFC4 peut appliquer volontairement des referentiels assets manquants detectes dans le fichier, en s appuyant sur une structure technique IFC4 pour les types inconnus, et affiche les equipements candidats en detail read-only
 - le shell web supporte maintenant une aide contextuelle V1 en pop-up, avec vignettes cliquables, texte a plat et visuels d explication ; la page `imports` en est le premier ecran equipe
@@ -90,6 +92,7 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - la V1 carte 3D IFC4 simplifiee est disponible dans `apps/web` : elle genere une scene legere depuis les noeuds spatiaux et equipements, rend des volumes simplifiees, permet la selection et affiche une heatmap d anciennete d inventaire
 - la carte 3D peut maintenant generer une scene depuis un fichier IFC via IfcOpenShell/Python cote backend ; quand l extraction reussit, les boites 3D utilisent les coordonnees monde IFC et des reperes d etage sont affiches
 - les imports IFC4 exigent maintenant une geometrie exploitable : IfcOpenShell indisponible, extraction impossible ou objet sans geometrie produisent un message explicite au lieu d un placement approximatif
+- la carte 3D affiche les etages derives sous forme de plateaux bleus semi-transparents avec bordure et etiquettes lisibles, controles par le bouton `Reperes d etage`
 - les noeuds spatiaux et les equipements importes depuis IFC4 conservent une geometrie persistante : centre monde, dimensions maximales, source et metadonnees de bbox
 - la carte 3D standard utilise en priorite la geometrie IFC persistante et refuse les generations partielles
 - la carte 3D V1 utilise `lastInventoryAt` pour classer les equipements de vert a rouge ; les dates inconnues sont affichees en gris neutre
@@ -120,6 +123,7 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
   - module `imports` avec parse rapide IFC4, selection des classes par cases a cocher, profil IFC4 avant analyse, limite `maxProducts`, niveau de geometrie et selection de proprietes pour reduire le volume traite sur les gros fichiers
   - module `imports` avec annulation d un traitement IFC4 `RUNNING` depuis le badge de statut du worker
   - module `imports` avec diagnostic de geometrie IFC obligatoire, badges `Geometrie OK`, `Geometrie manquante` et `Erreur geometrie`, import strict par defaut, import partiel explicite des lignes OK, export CSV des anomalies et profils IFC4 dedies
+  - module `imports` avec badge `Etage derive` pour les `IFCBUILDINGSTOREY` dont l emprise est calculee depuis le batiment parent ou les enfants geometriques
   - module `imports` avec aide contextuelle detaillee accessible depuis le header via un bouton `?`
   - module `labels` avec assistant de previsualisation et telechargement des etiquettes equipements et noeuds spatiaux
   - module `campaigns` avec liste, creation, preview des attendus, ouverture, execution terrain, cloture et archivage

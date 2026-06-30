@@ -310,7 +310,7 @@ function LocationsPageContent() {
                           : undefined
                       }
                     >
-                      <div className="min-w-0" style={{ paddingLeft: `${node.depth * 16}px` }}>
+                      <div className="min-w-0 flex-1" style={{ paddingLeft: `${node.depth * 16}px` }}>
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                           {node.children.length > 0 ? (
                             expandedNodeIds.includes(node.id) ? (
@@ -323,12 +323,12 @@ function LocationsPageContent() {
                           )}
                           <SpatialNodeTitle
                             type={node.type}
-                            label={node.label}
+                            label={node.path}
                             settings={displaySettings}
                             className="flex-1 min-w-0"
                           />
+                          <StatusBadge status="neutral" label={node.type} />
                         </div>
-                        <p className="text-xs text-muted-foreground">{node.type}</p>
                       </div>
                       <StatusBadge
                         status={node.isActive ? "active" : "inactive"}
@@ -384,66 +384,11 @@ function LocationsPageContent() {
                     ))}
                   </div>
                 </PageSection>
-
-                <PageSection
-                  title="Noeuds disponibles"
-                  description="Liste a plat utile pour selection rapide."
-                >
-                  <div className="space-y-2">
-                    {nodes.slice(0, 12).map((node) => (
-                      <div key={node.id} className="rounded-xl border border-border/60 px-3 py-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <SpatialNodeTitle
-                            type={node.type}
-                            label={node.label}
-                            path={node.path}
-                            settings={displaySettings}
-                            className="flex-1 min-w-0"
-                            pathClassName="md:inline-block hidden"
-                          />
-                        </div>
-                        <p className="font-mono text-xs text-muted-foreground md:hidden">
-                          {node.type} - {node.path}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </PageSection>
               </div>
             </div>
           </div>
         }
-        pagination={
-          <PageSection
-            title="Couverture"
-            description="Preparation du perimetre operateur pour les campagnes et les inventaires."
-          >
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Type filtre
-                </p>
-                <p className="mt-2 text-lg font-semibold text-foreground">
-                  {query.type === "all" ? "Tous" : query.type}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Noeuds charges
-                </p>
-                <p className="mt-2 text-lg font-semibold text-foreground">{formatNumber(nodes.length)}</p>
-              </div>
-              <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Scopes relies
-                </p>
-                <p className="mt-2 text-lg font-semibold text-foreground">
-                  {formatNumber(me?.scopeAssignments.length ?? 0)}
-                </p>
-              </div>
-            </div>
-          </PageSection>
-        }
+        pagination={null}
       />
     </AppShell>
   );

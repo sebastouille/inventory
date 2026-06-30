@@ -81,6 +81,8 @@ const campaignInclude = {
 
 type CampaignWithDetails = Prisma.InventoryCampaignGetPayload<{ include: typeof campaignInclude }>;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 @Injectable()
 export class InventoryCampaignsService {
   constructor(
@@ -408,11 +410,23 @@ export class InventoryCampaignsService {
     if (!input.activeSpatialNodeId) {
       throw new BadRequestException("Le scan du noeud spatial est obligatoire avant les equipements");
     }
-    const activeNodeIds = new Set(
-      input.observations.map((observation) => observation.activeSpatialNodeId ?? input.activeSpatialNodeId).filter(Boolean) as string[]
+    const activeNodeReferences = new Set(
+      input.observations
+        .map((observation) => this.normalizeSpatialNodeReference(observation.activeSpatialNodeId ?? input.activeSpatialNodeId))
+        .filter((reference): reference is string => Boolean(reference))
     );
-    for (const activeNodeId of activeNodeIds) {
-      await this.ensureNodeInCampaign(auth.organizationId, campaign, activeNodeId);
+    const resolvedSpatialNodeIds = new Map<string, string>();
+    for (const activeNodeReference of activeNodeReferences) {
+      const node = await this.ensureNodeInCampaign(auth.organizationId, campaign, activeNodeReference);
+      resolvedSpatialNodeIds.set(activeNodeReference, node.id);
+    }
+    const resolveObservedSpatialNodeId = (reference: string | null | undefined) => {
+      const normalized = this.normalizeSpatialNodeReference(reference);
+      return normalized ? (resolvedSpatialNodeIds.get(normalized) ?? null) : null;
+    };
+    const activeSpatialNodeId = resolveObservedSpatialNodeId(input.activeSpatialNodeId);
+    if (!activeSpatialNodeId) {
+      throw new BadRequestException("Noeud spatial scanne inconnu");
     }
 
     const existingBatch = await this.prisma.inventorySyncBatch.findFirst({
@@ -446,7 +460,7 @@ export class InventoryCampaignsService {
           organizationId: auth.organizationId,
           campaignId,
           userId: auth.sub,
-          activeSpatialNodeId: input.activeSpatialNodeId ?? null,
+          activeSpatialNodeId,
           clientBatchId: input.clientBatchId,
           payload: input as unknown as Prisma.InputJsonValue
         }
@@ -478,9 +492,9 @@ export class InventoryCampaignsService {
 
         const decision = await this.decideObservation(tx, auth.organizationId, campaign, {
           scannedPayload: observationInput.scannedPayload,
-          activeSpatialNodeId: observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId ?? null
+          activeSpatialNodeId: resolveObservedSpatialNodeId(observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId)
         });
-        const observedSpatialNodeId = observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId ?? null;
+        const observedSpatialNodeId = resolveObservedSpatialNodeId(observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId);
         const observation = await tx.inventoryObservation.create({
           data: {
             organizationId: auth.organizationId,
@@ -588,9 +602,9 @@ export class InventoryCampaignsService {
     if (!input.spatialNodeId?.trim()) {
       throw new BadRequestException("Noeud spatial obligatoire");
     }
-    await this.ensureNodeInCampaign(auth.organizationId, campaign, input.spatialNodeId);
+    const spatialNode = await this.ensureNodeInCampaign(auth.organizationId, campaign, input.spatialNodeId);
     const missingItems = campaign.expectedItems.filter(
-      (item) => item.expectedSpatialNodeId === input.spatialNodeId && !item.isSeen
+      (item) => item.expectedSpatialNodeId === spatialNode.id && !item.isSeen
     );
     const existingMissing = missingItems.length
       ? await this.prisma.inventoryAnomaly.findMany({
@@ -642,7 +656,7 @@ export class InventoryCampaignsService {
         entityType: "inventory_campaign",
         entityId: campaignId,
         metadata: {
-          spatialNodeId: input.spatialNodeId,
+          spatialNodeId: spatialNode.id,
           missingCreated: missingItemsToCreate.length,
           missingAlreadyExisting: existingMissingIds.size
         }
@@ -651,7 +665,7 @@ export class InventoryCampaignsService {
 
     return {
       campaignId,
-      spatialNodeId: input.spatialNodeId,
+      spatialNodeId: spatialNode.id,
       missingCreated: missingItemsToCreate.length,
       missingAlreadyExisting: existingMissingIds.size
     };
@@ -916,14 +930,7 @@ export class InventoryCampaignsService {
         message: "Payload equipement invalide"
       };
     }
-    const equipment = await db.equipment.findFirst({
-      where: {
-        organizationId,
-        internalCode: scannedCode,
-        isDeleted: false
-      },
-      include: equipmentInclude
-    });
+    const equipment = await this.findEquipmentForScan(db, organizationId, scannedCode);
     if (!equipment) {
       return {
         result: InventoryObservationResult.UNKNOWN_CODE,
@@ -1000,14 +1007,44 @@ export class InventoryCampaignsService {
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  private async ensureNodeInCampaign(organizationId: string, campaign: CampaignWithDetails, activeSpatialNodeId: string) {
-    const node = await this.prisma.spatialNode.findFirst({
+  private async findEquipmentForScan(db: DbClient, organizationId: string, scannedCode: string) {
+    const matches = await db.equipment.findMany({
       where: {
-        id: activeSpatialNodeId,
         organizationId,
-        isActive: true
-      }
+        isDeleted: false,
+        OR: [
+          {
+            internalCode: scannedCode
+          },
+          {
+            externalRef: scannedCode
+          },
+          {
+            numPiece: scannedCode
+          }
+        ]
+      },
+      include: equipmentInclude,
+      take: 2
     });
+    if (matches.length > 1) {
+      throw new BadRequestException("Code equipement ambigu");
+    }
+    return matches[0] ?? null;
+  }
+
+  private normalizeSpatialNodeReference(value?: string | null) {
+    const trimmed = value?.trim();
+    if (!trimmed) return null;
+    return trimmed.startsWith("NODE:") ? trimmed.slice(5).trim() : trimmed;
+  }
+
+  private async ensureNodeInCampaign(organizationId: string, campaign: CampaignWithDetails, activeSpatialNodeReference: string) {
+    const normalizedReference = this.normalizeSpatialNodeReference(activeSpatialNodeReference);
+    if (!normalizedReference) {
+      throw new BadRequestException("Noeud spatial scanne inconnu");
+    }
+    const node = await this.resolveSpatialNodeReference(organizationId, normalizedReference);
     if (!node) {
       throw new BadRequestException("Noeud spatial scanne inconnu");
     }
@@ -1021,6 +1058,42 @@ export class InventoryCampaignsService {
     if (!allowed) {
       throw new BadRequestException("Noeud spatial hors perimetre de campagne");
     }
+    return node;
+  }
+
+  private async resolveSpatialNodeReference(organizationId: string, reference: string) {
+    if (UUID_PATTERN.test(reference)) {
+      return this.prisma.spatialNode.findFirst({
+        where: {
+          id: reference,
+          organizationId,
+          isActive: true
+        }
+      });
+    }
+
+    const matches = await this.prisma.spatialNode.findMany({
+      where: {
+        organizationId,
+        isActive: true,
+        OR: [
+          {
+            code: reference
+          },
+          {
+            path: reference
+          },
+          {
+            externalRef: reference
+          }
+        ]
+      },
+      take: 2
+    });
+    if (matches.length > 1) {
+      throw new BadRequestException("Reference de noeud spatial ambigue");
+    }
+    return matches[0] ?? null;
   }
 
   private optional(value?: string | null) {

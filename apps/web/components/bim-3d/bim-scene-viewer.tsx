@@ -1,6 +1,6 @@
 "use client";
 
-import type { Bim3dAgeBucket, Bim3dScene, Bim3dSceneEquipment, Bim3dSceneNode } from "@inventory/shared";
+import type { Bim3dAgeBucket, Bim3dFloorGuide, Bim3dScene, Bim3dSceneEquipment, Bim3dSceneNode } from "@inventory/shared";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -51,6 +51,69 @@ function labelForBucket(bucket: Bim3dAgeBucket) {
   } satisfies Record<Bim3dAgeBucket, string>;
 }
 
+function createFloorLabelSprite(text: string, options?: { vertical?: boolean }) {
+  const canvas = document.createElement("canvas");
+  const width = options?.vertical ? 180 : 360;
+  const height = options?.vertical ? 360 : 128;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "rgba(255, 255, 255, 0.94)";
+    context.strokeStyle = "rgba(2, 132, 199, 0.9)";
+    context.lineWidth = 8;
+    roundRect(context, 8, 8, width - 16, height - 16, 28);
+    context.fill();
+    context.stroke();
+    context.fillStyle = "#0f172a";
+    context.font = "700 34px Arial";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    const label = text.length > 24 ? `${text.slice(0, 21)}...` : text;
+    if (options?.vertical) {
+      context.translate(width / 2, height / 2);
+      context.rotate(-Math.PI / 2);
+      context.fillText(label, 0, 0, height - 42);
+    } else {
+      context.fillText(label, width / 2, height / 2, width - 42);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(options?.vertical ? 5.5 : 8.5, options?.vertical ? 10 : 3, 1);
+  return sprite;
+}
+
+function roundRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.lineTo(x + width - radius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + radius);
+  context.lineTo(x + width, y + height - radius);
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  context.lineTo(x + radius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+}
+
+function floorLabelPosition(guide: Bim3dFloorGuide) {
+  if (guide.labelPosition) {
+    return new THREE.Vector3(guide.labelPosition.x, guide.labelPosition.y, guide.labelPosition.z);
+  }
+  const center = boxCenter(guide.bbox);
+  return new THREE.Vector3(guide.bbox.min.x, center.y + 1.1, guide.bbox.min.z);
+}
+
 export function BimSceneViewer({
   scene,
   heatmapEnabled,
@@ -92,7 +155,7 @@ export function BimSceneViewer({
     grid.position.y = -0.02;
     threeScene.add(grid);
 
-    const floorGuideMeshes: THREE.Mesh[] = [];
+    const floorGuideObjects: THREE.Object3D[] = [];
     if (showFloorGuides) {
       for (const guide of scene.floorGuides ?? []) {
         const size = boxSize(guide.bbox);
@@ -108,7 +171,7 @@ export function BimSceneViewer({
         const center = boxCenter(guide.bbox);
         mesh.position.set(center.x, guide.elevation + 0.03, center.z);
         threeScene.add(mesh);
-        floorGuideMeshes.push(mesh);
+        floorGuideObjects.push(mesh);
 
         const outline = new THREE.Mesh(
           geometry.clone(),
@@ -121,7 +184,17 @@ export function BimSceneViewer({
         );
         outline.position.copy(mesh.position);
         threeScene.add(outline);
-        floorGuideMeshes.push(outline);
+        floorGuideObjects.push(outline);
+
+        const label = createFloorLabelSprite(guide.label);
+        label.position.copy(floorLabelPosition(guide));
+        threeScene.add(label);
+        floorGuideObjects.push(label);
+
+        const sideLabel = createFloorLabelSprite(guide.label, { vertical: true });
+        sideLabel.position.set(guide.bbox.max.x + 0.9, center.y + 1.2, center.z);
+        threeScene.add(sideLabel);
+        floorGuideObjects.push(sideLabel);
       }
     }
 
@@ -263,14 +336,23 @@ export function BimSceneViewer({
           material.dispose();
         }
       }
-      for (const mesh of floorGuideMeshes) {
-        mesh.geometry.dispose();
-        const material = mesh.material;
-        if (Array.isArray(material)) {
-          material.forEach((item) => item.dispose());
-        } else {
-          material.dispose();
-        }
+      for (const object of floorGuideObjects) {
+        object.traverse((entry) => {
+          if (entry instanceof THREE.Mesh) {
+            entry.geometry.dispose();
+            const material = entry.material;
+            if (Array.isArray(material)) {
+              material.forEach((item) => item.dispose());
+            } else {
+              material.dispose();
+            }
+          }
+          if (entry instanceof THREE.Sprite) {
+            const material = entry.material;
+            material.map?.dispose();
+            material.dispose();
+          }
+        });
       }
       renderer.dispose();
       mountElement.innerHTML = "";

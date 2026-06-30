@@ -40,3 +40,4 @@ Utiliser les Architecture Decision Records pour les choix qui modifient l'archit
 - [0025 - Profil IFC4 et geometrie progressive](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0025-profil-ifc4-et-geometrie-progressive.md>)
 - [0026 - Assistant IFC4 sequentiel](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0026-assistant-ifc4-sequentiel.md>)
 - [0027 - Profils IFC4 et import partiel geometrie](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0027-profils-ifc4-et-import-partiel-geometrie.md>)
+- [0028 - IFCBUILDINGSTOREY comme repere spatial derive](</c:/Users/sebas/RepoSeb/inventory-app/docs/adr/0028-ifcbuildingstorey-comme-repere-spatial-derive.md>)

@@ -146,6 +146,20 @@ function vibrate(kind: FeedbackKind) {
   navigator.vibrate(pattern);
 }
 
+function expectedItemMatchesActiveNode(
+  item: InventoryCampaignDetail["expectedItems"][number],
+  activeNodeReference: string | null
+) {
+  const reference = activeNodeReference?.trim();
+  if (!reference) return false;
+  if (item.expectedSpatialNodeId === reference) return true;
+  const expectedPath = item.expectedSpatialPath?.trim();
+  if (!expectedPath) return false;
+  if (expectedPath === reference || expectedPath.startsWith(`${reference}/`)) return true;
+  const expectedSegments = expectedPath.split("/").filter(Boolean);
+  return expectedSegments[expectedSegments.length - 1] === reference;
+}
+
 export default function CampaignRunPage() {
   const token = useStoredToken();
   const router = useRouter();
@@ -485,7 +499,7 @@ export default function CampaignRunPage() {
       enqueueEquipmentScan(parsed.rawPayload, source);
       return;
     }
-    setError("Payload invalide. Attendu : NODE:<id> ou EQ:<code interne>");
+    setError("Payload invalide. Attendu : NODE:<noeud> ou EQ:<code equipement>");
     applyFeedback({
       kind: "destructive",
       title: "Code invalide",
@@ -496,7 +510,9 @@ export default function CampaignRunPage() {
   function submitManual() {
     const value = manualPayload.trim();
     if (!value) return;
-    const payload = value.startsWith("NODE:") || value.startsWith("EQ:") ? value : activeNodeId ? `EQ:${value}` : `NODE:${value}`;
+    const hasExplicitPrefix = value.startsWith("NODE:") || value.startsWith("EQ:");
+    const looksLikeSpatialPath = value.includes("/");
+    const payload = hasExplicitPrefix ? value : looksLikeSpatialPath || !activeNodeId ? `NODE:${value}` : `EQ:${value}`;
     setManualPayload("");
     handleScanRef.current(payload, "MANUAL");
   }
@@ -556,7 +572,7 @@ export default function CampaignRunPage() {
     });
   }
 
-  const activeExpected = campaign?.expectedItems.filter((item) => item.expectedSpatialNodeId === activeNodeId) ?? [];
+  const activeExpected = campaign?.expectedItems.filter((item) => expectedItemMatchesActiveNode(item, activeNodeId)) ?? [];
   const seenInActiveNode = activeExpected.filter((item) => item.isSeen).length;
   const latestObservations = lastSync?.observations ?? campaign?.observations.slice(0, 8) ?? [];
 
@@ -661,14 +677,14 @@ export default function CampaignRunPage() {
               {scanMode === "MANUAL" ? (
                 <div className="rounded-3xl border border-border/70 p-4">
                   <p className="mb-3 text-sm text-muted-foreground">
-                    Saisir `NODE:&lt;id&gt;` pour un noeud ou `EQ:&lt;code&gt;` pour un equipement. Si le prefixe manque,
-                    l ecran deduit le type selon le noeud actif.
+                    Saisir `NODE:&lt;uuid, code, chemin ou reference externe&gt;` pour un noeud ou `EQ:&lt;code interne, reference
+                    externe ou num piece&gt;` pour un equipement. Si le prefixe manque, l ecran deduit le type selon le noeud actif.
                   </p>
                   <Field label="Saisie manuelle">
                     <Input
                       value={manualPayload}
                       onChange={(event) => setManualPayload(event.target.value)}
-                      placeholder={activeNodeId ? "AST-001 ou EQ:AST-001" : "NODE:<spatialNodeId>"}
+                      placeholder={activeNodeId ? "AST-001, REF-001 ou EQ:AST-001" : "NODE:<code ou reference noeud>"}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           submitManual();

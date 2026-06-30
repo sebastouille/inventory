@@ -20,7 +20,7 @@
     "db:backfill-spatial": "npm run db:backfill-spatial --workspace api",
     "db:backfill-equipment-spatial": "npm run db:backfill-equipment-spatial --workspace api",
     "db:reset-test-imports-spatial": "npm run db:reset-test-imports-spatial --workspace api",
-    "prisma:studio": "npx prisma studio --schema prisma/schema.prisma",
+    "prisma:studio": "cross-env DATABASE_URL=postgresql://inventory:inventory@127.0.0.1:5560/inventory npx prisma studio --schema prisma/schema.prisma",
     "stack:up": "docker compose up -d --build",
     "stack:down": "docker compose down",
     "stack:logs": "docker compose logs -f"

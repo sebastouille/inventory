@@ -130,6 +130,10 @@ const DEFAULT_OWNER_CODE = "CPRP";
 const DEFAULT_MAX_PRODUCTS = 5000;
 const DEFAULT_MAX_SHAPE_PARTS = 12;
 const DEFAULT_SELECTED_CLASSES = ["IFCFURNITURE"];
+const STOREY_DERIVED_GEOMETRY_SOURCE = "ifc-storey-derived";
+const STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE = "ifc-storey-derived-from-building";
+const STOREY_DERIVED_THICKNESS_METERS = 0.08;
+const STOREY_DERIVED_MARGIN_METERS = 0.5;
 const EQUIPMENT_CLASSES = new Set([
   "IFCFURNITURE",
   "IFCFURNISHINGELEMENT",
@@ -308,6 +312,15 @@ function readIfcValue(value: string | undefined) {
     return inner.replace(/^\.+|\.+$/g, "");
   }
   return normalized.replace(/^\.+|\.+$/g, "");
+}
+
+function readIfcNumber(value: string | undefined) {
+  const rawValue = readIfcValue(value);
+  if (rawValue == null) {
+    return null;
+  }
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function readRef(value: string | undefined) {
@@ -546,6 +559,104 @@ function mergeGeometryPreview(left: Ifc4GeometryPreview | null | undefined, righ
       aggregate: true
     }
   } satisfies Ifc4GeometryPreview;
+}
+
+function isStoreyNode(node: Pick<Ifc4SpatialPreviewNode, "sourceClass" | "type">) {
+  return node.sourceClass?.toUpperCase() === "IFCBUILDINGSTOREY" || node.type === "FLOOR";
+}
+
+function isDerivedStoreyGeometry(geometry: Ifc4GeometryPreview | null | undefined) {
+  return geometry?.geometrySource === STOREY_DERIVED_GEOMETRY_SOURCE
+    || geometry?.geometrySource === STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE;
+}
+
+function withDerivedStoreyFailure(geometry: Ifc4GeometryPreview | null | undefined): Ifc4GeometryPreview {
+  return {
+    geometryStatus: geometry?.geometryStatus === "ERROR" ? "ERROR" : "MISSING",
+    geometryMessage: geometry?.geometryMessage ?? "Emprise d etage impossible a calculer depuis les enfants",
+    worldCenter: geometry?.worldCenter ?? null,
+    worldSize: geometry?.worldSize ?? null,
+    worldBbox: geometry?.worldBbox ?? null,
+    geometrySource: geometry?.geometrySource ?? null,
+    geometryMetadata: {
+      ...(geometry?.geometryMetadata ?? {}),
+      reasonCode: "STOREY_DERIVATION_FAILED",
+      requiresOwnGeometry: false
+    }
+  };
+}
+
+function deriveStoreyGeometry(input: {
+  storey: Ifc4SpatialPreviewNode;
+  sourceGlobalId: string | null;
+  sourceMetadata: Record<string, unknown>;
+  parentGeometry: Ifc4GeometryPreview | null;
+  childGeometries: Ifc4GeometryPreview[];
+}): Ifc4GeometryPreview | null {
+  const parentBbox = input.parentGeometry?.geometryStatus === "READY" ? input.parentGeometry.worldBbox : null;
+  const childBboxes = input.childGeometries
+    .filter((geometry) => geometry.geometryStatus === "READY" && geometry.worldBbox)
+    .map((geometry) => geometry.worldBbox!);
+  if (!parentBbox && childBboxes.length === 0) {
+    return null;
+  }
+
+  const sourceBbox = parentBbox ?? {
+    min: {
+      x: Math.min(...childBboxes.map((bbox) => bbox.min.x)) - STOREY_DERIVED_MARGIN_METERS,
+      y: Math.min(...childBboxes.map((bbox) => bbox.min.y)),
+      z: Math.min(...childBboxes.map((bbox) => bbox.min.z)) - STOREY_DERIVED_MARGIN_METERS
+    },
+    max: {
+      x: Math.max(...childBboxes.map((bbox) => bbox.max.x)) + STOREY_DERIVED_MARGIN_METERS,
+      y: Math.max(...childBboxes.map((bbox) => bbox.max.y)),
+      z: Math.max(...childBboxes.map((bbox) => bbox.max.z)) + STOREY_DERIVED_MARGIN_METERS
+    }
+  };
+  const properties = typeof input.sourceMetadata.properties === "object" && input.sourceMetadata.properties != null
+    ? input.sourceMetadata.properties as Record<string, unknown>
+    : {};
+  const elevationValue = normalizeFreeText(input.sourceMetadata.elevationMeters ?? properties.Elevation ?? properties.elevation ?? properties.StoreyElevation);
+  const elevation = elevationValue != null && Number.isFinite(Number(elevationValue))
+    ? Number(elevationValue)
+    : sourceBbox.min.y;
+  const derivation = parentBbox ? "STOREY_EXTENT_FROM_PARENT_BUILDING" : "STOREY_EXTENT_FROM_CHILDREN";
+  const geometrySource = parentBbox ? STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE : STOREY_DERIVED_GEOMETRY_SOURCE;
+  const message = parentBbox
+    ? "Geometrie d etage derivee depuis l emprise du batiment parent"
+    : "Geometrie d etage derivee depuis les enfants";
+  const bbox = {
+    min: { x: sourceBbox.min.x, y: elevation, z: sourceBbox.min.z },
+    max: { x: sourceBbox.max.x, y: elevation + STOREY_DERIVED_THICKNESS_METERS, z: sourceBbox.max.z }
+  };
+
+  return {
+    geometryStatus: "READY",
+    geometryMessage: message,
+    worldCenter: {
+      x: (bbox.min.x + bbox.max.x) / 2,
+      y: (bbox.min.y + bbox.max.y) / 2,
+      z: (bbox.min.z + bbox.max.z) / 2
+    },
+    worldSize: {
+      x: bbox.max.x - bbox.min.x,
+      y: bbox.max.y - bbox.min.y,
+      z: bbox.max.z - bbox.min.z
+    },
+    worldBbox: bbox,
+    geometrySource,
+    geometryMetadata: {
+      bbox,
+      derivation,
+      thicknessMeters: STOREY_DERIVED_THICKNESS_METERS,
+      marginMeters: parentBbox ? 0 : STOREY_DERIVED_MARGIN_METERS,
+      sourceGlobalId: input.sourceGlobalId,
+      parentGeometrySource: input.parentGeometry?.geometrySource ?? null,
+      derivedFromChildrenCount: childBboxes.length,
+      requiresOwnGeometry: false,
+      extractionEngine: "ifcopenshell-python"
+    }
+  };
 }
 
 @Injectable()
@@ -1609,10 +1720,18 @@ export class Ifc4AssistantService implements OnModuleInit {
 
     for (const node of [...analysis.spatialNodes].sort((left, right) => pathDepth(left.path) - pathDepth(right.path))) {
       const messages: string[] = [];
-      let status: Ifc4GeometryDiagnosticItem["status"] = node.geometry?.geometryStatus ?? "MISSING";
+      let status: Ifc4GeometryDiagnosticItem["status"] = isDerivedStoreyGeometry(node.geometry)
+        ? "DERIVED"
+        : node.geometry?.geometryStatus ?? "MISSING";
       let reasonCode: string | null = null;
       let importable = isSpatialReady(node);
-      if (node.geometry?.geometryStatus !== "READY") {
+      if (isDerivedStoreyGeometry(node.geometry)) {
+        reasonCode = "STOREY_GEOMETRY_DERIVED";
+        messages.push(node.geometry?.geometryMessage ?? "Geometrie d etage derivee depuis les enfants");
+      } else if (isStoreyNode(node) && node.geometry?.geometryMetadata?.reasonCode === "STOREY_DERIVATION_FAILED") {
+        reasonCode = "STOREY_DERIVATION_FAILED";
+        messages.push(node.geometry?.geometryMessage ?? "Emprise d etage impossible a calculer depuis les enfants");
+      } else if (node.geometry?.geometryStatus !== "READY") {
         reasonCode = node.geometry?.geometryStatus === "ERROR" ? "GEOMETRY_ERROR" : "GEOMETRY_MISSING";
         messages.push(node.geometry?.geometryMessage ?? "Geometrie IFC obligatoire absente");
       } else if (node.parentPath && !existingPaths.has(node.parentPath) && invalidSpatial.has(node.parentPath)) {
@@ -1681,6 +1800,7 @@ export class Ifc4AssistantService implements OnModuleInit {
         ready: items.filter((item) => item.geometryStatus === "READY").length,
         missing: items.filter((item) => item.geometryStatus === "MISSING").length,
         errors: items.filter((item) => item.geometryStatus === "ERROR").length,
+        derivedStoreys: items.filter((item) => item.status === "DERIVED").length,
         blockedByParent: items.filter((item) => item.status === "PARENT_INVALID").length,
         blockedBySpatialTarget: items.filter((item) => item.status === "SPATIAL_TARGET_INVALID").length,
         importable: items.filter((item) => item.importable).length,
@@ -3167,6 +3287,7 @@ export class Ifc4AssistantService implements OnModuleInit {
     const warnings: string[] = [];
     const rowMap = new Map<string, ImportRowPreview>();
     const nodeMap = new Map<string, Ifc4SpatialPreviewNode>();
+    const sourceMetadataByPath = new Map<string, Record<string, unknown>>();
     const productSpatialPath = new Map<string, { path: string | null; externalRef: string | null }>();
 
     const spatialRefs = [...entities.values()]
@@ -3205,6 +3326,7 @@ export class Ifc4AssistantService implements OnModuleInit {
         }
         return;
       }
+      sourceMetadataByPath.set(input.path, input.sourceMetadata);
       const row = buildRow(rowMap.size + 2, {
         type: input.type,
         code: input.code,
@@ -3250,6 +3372,7 @@ export class Ifc4AssistantService implements OnModuleInit {
         const code = normalizeCode(product.name ?? product.objectType ?? product.globalId, type);
         const label = normalizeLabel(product.name ?? product.objectType ?? product.globalId, type);
         const path = parentPath ? `${parentPath}/${code}` : code;
+        const storeyElevation = sourceClass === "IFCBUILDINGSTOREY" ? readIfcNumber(entities.get(entityId)?.args[9]) : null;
         pathByEntity.set(entityId, path);
         createNode({
           type,
@@ -3261,6 +3384,7 @@ export class Ifc4AssistantService implements OnModuleInit {
           sourceClass,
           sourceMetadata: {
             ifcEntityId: entityId,
+            elevationMeters: storeyElevation,
             properties: productProperties.get(entityId) ?? {}
           },
           geometry: product.globalId ? geometryByGlobalId.get(product.globalId) ?? null : null
@@ -3362,6 +3486,66 @@ export class Ifc4AssistantService implements OnModuleInit {
       const parentPath = pathByEntity.get(parentId) ?? null;
       if (parentPath) {
         productSpatialPath.set(entityId, { path: parentPath, externalRef: products.get(parentId)?.globalId ?? null });
+      }
+    }
+
+    for (const node of nodeMap.values()) {
+      if (!isStoreyNode(node) || node.geometry?.geometryStatus === "READY") {
+        continue;
+      }
+
+      const childGeometries: Ifc4GeometryPreview[] = [];
+      for (const candidate of nodeMap.values()) {
+        if (candidate.path !== node.path && candidate.path.startsWith(`${node.path}/`) && candidate.geometry?.geometryStatus === "READY") {
+          childGeometries.push(candidate.geometry);
+        }
+      }
+      for (const product of products.values()) {
+        if (!EQUIPMENT_CLASSES.has(product.sourceClass) || !product.globalId) {
+          continue;
+        }
+        const spatial = productSpatialPath.get(product.id);
+        if (!spatial?.path || (spatial.path !== node.path && !spatial.path.startsWith(`${node.path}/`))) {
+          continue;
+        }
+        const geometry = geometryByGlobalId.get(product.globalId);
+        if (geometry?.geometryStatus === "READY") {
+          childGeometries.push(geometry);
+        }
+      }
+
+      const sourceMetadata = sourceMetadataByPath.get(node.path) ?? {};
+      const parentNode = node.parentPath ? nodeMap.get(node.parentPath) ?? null : null;
+      const derivedGeometry = deriveStoreyGeometry({
+        storey: node,
+        sourceGlobalId: node.externalRef,
+        sourceMetadata,
+        parentGeometry: parentNode?.type === "BUILDING" ? parentNode.geometry ?? null : null,
+        childGeometries
+      });
+      const nextGeometry = derivedGeometry ?? withDerivedStoreyFailure(node.geometry);
+      node.geometry = nextGeometry;
+      const row = rowMap.get(node.path);
+      if (row) {
+        const nextSourceMetadata = derivedGeometry
+          ? {
+              ...sourceMetadata,
+              storeyGeometryPolicy: derivedGeometry.geometrySource === STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE
+                ? "DERIVED_FROM_PARENT_BUILDING"
+                : "DERIVED_FROM_CHILDREN",
+              geometryMessage: derivedGeometry.geometryMessage
+            }
+          : {
+              ...sourceMetadata,
+              storeyGeometryPolicy: "DERIVED_FROM_CHILDREN",
+              geometryError: "STOREY_DERIVATION_FAILED"
+            };
+        sourceMetadataByPath.set(node.path, nextSourceMetadata);
+        row.values = {
+          ...row.values,
+          sourceMetadata: JSON.stringify(nextSourceMetadata),
+          ...geometryRowValues(nextGeometry)
+        };
       }
     }
 
