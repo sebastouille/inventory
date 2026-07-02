@@ -97,6 +97,7 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
 - l assistant IFC4 transforme le fichier IFC4 en lignes source pour les domaines imports existants, puis orchestre les jobs enfants et stocke le dernier resultat d application des referentiels assets dans les options JSON du job d analyse
 - les corrections IFC4 de preview restent transmises au lancement comme payload assistant, mais elles peuvent maintenant etre sauvegardees dans `Ifc4AssistantProfile` pour reutilisation
 - les mappings de proprietes IFC4 equipements peuvent etre persistants via `Ifc4AssistantProfile.equipmentMappings`; ils transforment les proprietes `IfcPropertySingleValue` en codes de referentiels assets et champs equipement (`internalCode`, `numPiece`, `externalRef`) avant creation de job
+- si un modele IFC est mappe sans marque source exploitable, le modele est rattache a une marque technique `NON_DEFINI` pour eviter de perdre la valeur `Modele/Gamme`
 - le mode `IMPORT_READY_ONLY` stocke les diagnostics exclus dans `ImportJob.options.ifcGeometryExcludedDiagnostics` pour enrichir le rapport sans executer de lignes invalides
 - les resultats d analyse IFC4 restent hors base : JSON de parse rapide, JSON de preview, flux NDJSON metadata et flux NDJSON geometrie sont stockes sous `.runtime/imports/<organizationId>/<jobId>/`
 - les donnees source IFC4 sont conservees dans les champs existants :
@@ -106,6 +107,7 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
   - `Equipment.externalRef` pour une reference source externe prioritaire
   - `Equipment.numPiece` pour le numero de piece metier extrait si disponible
   - `Equipment.technicalCharacteristics` pour les proprietes IFC conservees lors de l import equipements
+- dans l assistant IFC4, la propriete source `N de piece` est aussi utilisee comme cle de rapprochement entre un equipement et une `ROOM` du meme batiment ; le numero doit etre unique par batiment pour permettre ce rattachement automatique
 - `Bim3dMap` represente une carte 3D simplifiee generee pour une organisation, eventuellement rattachee a un `ImportJob`
 - `Bim3dMapBuild` represente une tentative de generation de scene, avec statut, duree, erreurs et resume
 - le fichier scene contient les bounding boxes simplifiees des noeuds, les positions de cubes equipements, les couleurs de rendu et les buckets d anciennete d inventaire
@@ -118,6 +120,8 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
   - `geometryUpdatedAt`
 - les dimensions stockees sont des bounding boxes en metres et non des mesures certifiees
 - pour un `SpatialNode` de type `FLOOR` issu de `IFCBUILDINGSTOREY`, `geometrySource=ifc-storey-derived-from-building` signifie que l emprise X/Z est reprise du batiment parent avec une epaisseur visuelle fixe ; `geometrySource=ifc-storey-derived` signifie que l emprise est calculee depuis les enfants geometriques avec une marge
+- pour un `SpatialNode` de type `ZONE` issu de `IFC_PROPERTY_ZONE`, `geometrySource=ifc-zone-derived-from-spaces` signifie que l emprise est calculee depuis les bbox des `IFCSPACE` enfants ; la zone reste une zone applicative derivee, pas un objet IFC geometrique natif
+- en mode strict IFC4, une zone derivee doit avoir un parent `FLOOR` resolu depuis la relation IFC `IFCBUILDINGSTOREY` ; un rattachement direct au batiment par fallback est considere comme une anomalie
 - une ligne IFC sans geometrie exploitable ne doit pas effacer une geometrie deja persistante
 - les maillages lourds IFC ne sont pas stockes en base en V1
 - le catalogue import `immobilizations` expose les champs comptables V1 et son execution reelle cree ou met a jour `Immobilization` par `organizationId + code`
@@ -142,10 +146,14 @@ Ce fichier capture le modele de donnees oriente metier. Garder la coherence avec
 - `InventoryCampaign` pilote une campagne terrain equipements et reste distinct du domaine stock `inventory`
 - `InventoryCampaignScope` definit le perimetre spatial d une campagne avec inclusion optionnelle des enfants
 - `InventoryCampaignExpectedItem` fige l equipement attendu et sa localisation au moment de l ouverture
+- `InventoryCampaignExpectedItem` expose aussi `Equipment.numPiece` dans les contrats applicatifs pour permettre l affichage et la resolution terrain par numero de piece metier
 - `InventoryObservation` trace chaque scan terrain avec un `clientObservationId` idempotent pour eviter les doublons en reprise offline
 - `InventoryObservation` conserve maintenant aussi la source de scan `CAMERA | HID | MANUAL`, une indication appareil optionnelle et la date client du scan si elle est fournie
 - `InventoryAnomaly` represente uniquement un ecart : `WRONG_LOCATION`, `UNKNOWN_CODE`, `MISSING`, `DUPLICATE` ou `OUT_OF_SCOPE`
+- un `InventoryObservation MATCH` peut etre obtenu sur un noeud actif conteneur si la localisation attendue est le noeud actif ou un descendant
+- un `InventoryAnomaly WRONG_LOCATION` genere une `InventoryCorrection LOCATION_CHANGE` proposee vers le noeud observe, mais ne modifie pas directement la localisation de l equipement
 - `InventoryCorrection` porte la decision superviseur et peut appliquer une localisation, un statut, une demande de re-etiquetage ou un lien immobilisation manuel
+- `Equipment.lastInventoryAt` est mis a jour a la cloture de campagne a partir des observations ayant un `equipmentId`, puis l action est tracee dans `AuditLog`
 - `InventoryAttachment` reserve le stockage de photos et pieces jointes sous `.runtime/inventory-attachments`
 - les exports etiquettes ne creent pas de table dediee ; le payload est derive a la demande depuis `Equipment.internalCode` ou `SpatialNode.id`
 - le bootstrap production ne cree pas de `Location`, `SpatialNode`, `Product`, `Supplier`, `Equipment`, `Immobilization`, `InventoryCampaign` ou donnee de demonstration associee

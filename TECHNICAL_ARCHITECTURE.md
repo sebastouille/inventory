@@ -30,7 +30,7 @@
 - PWA `apps/web` avec `manifest.webmanifest`, icones applicatives et ergonomie mobile
 - l execution terrain web utilise maintenant un controleur de scan unique : camera via `BarcodeDetector` si disponible, fallback `@zxing/browser`, douchette Bluetooth en mode clavier HID, saisie manuelle, parsing partage et file IndexedDB par campagne
 - avant persistence, `inventory-campaigns` resout les references scannees en UUID applicatifs : noeud par UUID, code, chemin ou reference externe ; equipement par code interne, reference externe ou numero de piece
-- `POST /api/v1/inventory-campaigns/:id/complete-node` permet de terminer un noeud actif et de generer les anomalies `MISSING` de facon idempotente
+- `POST /api/v1/inventory-campaigns/:id/complete-node` permet de terminer un noeud actif et de generer les anomalies `MISSING` de facon idempotente sur ce noeud et ses descendants
 - documentation versionnee en Markdown a la racine et sous `docs/`
 - la regeneration Prisma locale passe par `scripts/prisma-generate-safe.ps1`, qui refuse `PRISMA_GENERATE_NO_ENGINE` et verifie que le client genere embarque bien l engine local Windows/Linux attendu pour `postgresql://`
 - le deploiement production Dokploy utilise `docker-compose.prod.yml` avec ports internes `web=3010`, `api=3011`, `admin=3014`, exposes via `expose` et non publies sur les ports hote
@@ -92,6 +92,9 @@
 - le domaine `spatial` expose des endpoints sous `/api/v1/spatial/nodes` pour liste, arbre, detail, resume, creation, mise a jour et archivage
 - le domaine `label-exports` expose `POST /api/v1/label-exports/equipments/*` et `POST /api/v1/label-exports/spatial-nodes/*` pour preview et export stateless des etiquettes
 - le domaine `inventory-campaigns` expose les campagnes terrain equipements sous `/api/v1/inventory-campaigns`, avec creation, preview attendus, ouverture, cloture, archivage et synchronisation terrain
+- le matching terrain `inventory-campaigns` accepte les noeuds actifs conteneurs : un equipement attendu dans un descendant du noeud actif produit `MATCH`
+- `inventory-campaigns.sync` cree une `InventoryAnomaly WRONG_LOCATION` et une `InventoryCorrection LOCATION_CHANGE` proposee quand un equipement attendu est observe dans un autre noeud, sans modifier `Equipment.currentSpatialNodeId`
+- `inventory-campaigns.close` finalise les manquants restants, met a jour `Equipment.lastInventoryAt` pour les equipements observes et audite `inventory.equipment.observed`
 - le domaine `inventory-anomalies` expose les anomalies et corrections superviseur sous `/api/v1/inventory-anomalies`
 - le domaine `reconciliation` expose le rapprochement manuel sous `/api/v1/reconciliation/equipment/:equipmentId`
 - le domaine `global-search` expose `GET /api/v1/search/global?q=...` pour agreger les suggestions metier cross-domaines selon les permissions de lecture deja presentes
@@ -101,6 +104,8 @@
 - `bim-3d` stocke aussi le fichier IFC source et le JSON technique d extraction sous `.runtime/bim-3d/`, puis transforme ces donnees en `scene.v1.json`
 - les imports IFC4 appellent aussi le worker IfcOpenShell pendant l analyse, rapprochent la geometrie par `GlobalId`, et persistent les champs de geometrie sur `SpatialNode` et `Equipment`
 - les imports IFC4 traitent `IFCBUILDINGSTOREY` comme un conteneur spatial particulier : si aucune bbox brute n existe, l assistant derive une emprise depuis le batiment parent geometrique avec `geometrySource=ifc-storey-derived-from-building`, sinon depuis les enfants geometriques avec `geometrySource=ifc-storey-derived`, et garde les autres objets en mode strict
+- les imports IFC4 traitent aussi `IFC_PROPERTY_ZONE` comme un conteneur spatial derive : si la zone vient d une propriete `Zone` et n a pas de bbox propre, l assistant calcule son emprise depuis les bbox des `IFCSPACE` enfants avec `geometrySource=ifc-zone-derived-from-spaces`
+- en mode `STRICT_ALL_READY`, le parent d une `IFC_PROPERTY_ZONE` derivee depuis un `IFCSPACE` est resolu uniquement en remontant les relations IFC jusqu a `IFCBUILDINGSTOREY`; l absence de relation produit `IFC_STOREY_RELATION_MISSING`
 - la generation standard `bim-3d` refuse les donnees sans geometrie persistante avec `BIM3D_GEOMETRY_MISSING` ou `BIM3D_PARTIAL_GEOMETRY`
 - le viewer `apps/web/app/spatial-3d/page.tsx` utilise `three` et `OrbitControls`, avec une scene client-only composee de boites et cubes
 - le viewer 3D affiche les reperes d etage issus de la scene sous forme de plateaux XZ semi-transparents, bordures et labels `Sprite` via `CanvasTexture`, et distingue `Coordonnees IFC`, `Mode mixte` et `Fallback spatial`
@@ -147,6 +152,8 @@
 - les rapports imports supportent le statut ligne `NO_OP` pour les objets existants sans difference utile ; ces lignes sont affichees mais exclues des ecritures
 - les endpoints IFC4 acceptent `spatialOverrides`, `assetReferenceOverrides` et `equipmentOptions` en multipart pour appliquer les corrections de preparation avant creation du job ou application des referentiels
 - `equipmentOptions.propertyMappings` permet de choisir les proprietes `IfcPropertySingleValue` source des champs equipement (`internalCode`, `numPiece`, `externalRef`) et des referentiels assets ; ces mappings restent ephemeres en V1 et sont appliques lors de `analyze`, `asset-references/apply` et `equipments/create-job`
+- quand le mapping IFC4 fournit un modele sans marque, l assistant cree un code modele sous la marque technique `NON_DEFINI` afin de conserver la valeur source sans bloquer l import
+- l assistant IFC4 resout aussi le rattachement spatial des equipements par propriete Archicad `N de piece` : il indexe les `ROOM` par numero de piece dans chaque batiment, bloque les doublons, puis remplace le chemin spatial de l equipement par le chemin de la room correspondante quand la correspondance est unique
 - cote web, la preview IFC4 construit une vue derivee en memoire a partir de `spatialNodes`, `equipmentRows` et `assetReferences` : les equipements sont regroupes par `currentSpatialPath`, affiches sous le noeud spatial correspondant, et les lignes sans noeud resolu alimentent une liste d anomalies sans changer les contrats backend
 - cote web, l assistant IFC4 charge les profils dedies, affiche un panneau diagnostics geometrie, filtre les lignes OK/a corriger et telecharge l export CSV des anomalies sans relancer le worker Python
 - `F2-L01` a introduit le rattachement direct `Equipment -> SpatialNode`, les dates metier `receivedAt`, `commissionedAt`, `lastInventoryAt`, les champs texte `numPiece` et `externalRef`, et le retrait de `barcode` / `qrCode` des contrats `assets`
@@ -168,6 +175,7 @@
 - `apps/web` et `apps/admin` branchent chacun un hook `useGlobalSearch`; l admin recompose des URLs absolues vers `apps/web` via `NEXT_PUBLIC_WEB_APP_URL`
 - les pages `campaigns`, `locations`, `immobilizations` et `imports` utilisent des query params comme deep-links V1 afin d ouvrir un detail sans creer de nouvelle route detail cote Next
 - les permissions `imports.read`, `imports.manage` et `imports.execute` sont rattachees au RBAC courant et auditees
+- en execution de campagne, la resolution du noeud actif accepte id/path/code/externalRef et, en dernier recours, le `numPiece` des equipements attendus si ce numero pointe vers un seul noeud attendu ; le noeud actif peut etre un etage, une zone ou une piece
 - agragation et tri applicatifs en V1 sur les ressources prioritaires, avec optimisation SQL differee au backlog
 - la page `apps/web/app/imports/page.tsx` embarque un premier module d aide V1 avec vignettes SVG statiques cliquables sous `apps/web/public/help/imports/`
 - la V2 devra probablement introduire un composant transverse de type `GuidedHelpTour` dans `packages/ui`, avec registre de zones cibles par page, et une persistence de progression cote API ou `Organization/User settings` selon l arbitrage futur
@@ -193,7 +201,7 @@
 - le worker filtre les classes IFC avant d appeler `ifcopenshell.geom.create_shape`, pour eviter le cout du type tres large `IfcElement`
 - en Docker, l image API utilise Debian slim et un venv Python dedie pour installer `ifcopenshell`
 - si le worker echoue dans un flux IFC strict, l API retourne une erreur explicite et ne produit pas de placement approximatif
-- l exception documentee au flux strict concerne uniquement les `IFCBUILDINGSTOREY` : une geometrie derivee depuis les enfants est acceptee si elle est marquee explicitement comme telle
+- les exceptions documentees au flux strict concernent les conteneurs spatiaux `IFCBUILDINGSTOREY` et `IFC_PROPERTY_ZONE` : une geometrie derivee est acceptee si elle est marquee explicitement comme telle
 - le navigateur ne parse jamais le fichier IFC source
 
 ## Regles de mise a jour

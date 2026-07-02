@@ -244,7 +244,14 @@ export default function LabelsPage() {
                         </p>
                         <p className="font-mono text-xs text-muted-foreground">{item.barcodePayload}</p>
                       </div>
-                      <p className="text-sm text-muted-foreground">{item.spatialPath}</p>
+                      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                        <span>{item.spatialPath}</span>
+                        {item.nodeType === "ROOM" && item.roomNumber ? (
+                          <span className="rounded-full border border-border/70 px-2 py-0.5 font-mono text-xs text-foreground">
+                            {item.roomNumber}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                   ))}
                 </div>

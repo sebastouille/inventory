@@ -1,5 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { InventoryAnomalyType, InventoryCampaignStatus, InventoryObservationResult, Prisma } from "@prisma/client";
+import {
+  InventoryAnomalyType,
+  InventoryCampaignStatus,
+  InventoryCorrectionType,
+  InventoryObservationResult,
+  Prisma
+} from "@prisma/client";
 import type {
   CompleteInventoryNodeInput,
   CompleteInventoryNodeResult,
@@ -70,6 +76,11 @@ const campaignInclude = {
   observations: {
     include: {
       equipment: true,
+      expectedItem: {
+        include: {
+          expectedSpatialNode: true
+        }
+      },
       observedSpatialNode: true,
       createdBy: true
     },
@@ -342,6 +353,54 @@ export class InventoryCampaignsService {
           }))
         });
       }
+      const observedEquipments = await tx.inventoryObservation.findMany({
+        where: {
+          campaignId,
+          equipmentId: {
+            not: null
+          }
+        },
+        select: {
+          id: true,
+          equipmentId: true,
+          result: true,
+          observedAt: true,
+          createdById: true
+        },
+        orderBy: {
+          observedAt: "desc"
+        }
+      });
+      const latestObservationByEquipment = new Map<string, (typeof observedEquipments)[number]>();
+      for (const observation of observedEquipments) {
+        if (observation.equipmentId && !latestObservationByEquipment.has(observation.equipmentId)) {
+          latestObservationByEquipment.set(observation.equipmentId, observation);
+        }
+      }
+      for (const [equipmentId, observation] of latestObservationByEquipment) {
+        await tx.equipment.update({
+          where: {
+            id: equipmentId
+          },
+          data: {
+            lastInventoryAt: observation.observedAt
+          }
+        });
+        await this.auditService.log({
+          db: tx,
+          organizationId: auth.organizationId,
+          userId: observation.createdById ?? auth.sub,
+          action: "inventory.equipment.observed",
+          entityType: "equipment",
+          entityId: equipmentId,
+          metadata: {
+            campaignId,
+            observationId: observation.id,
+            result: observation.result,
+            observedAt: observation.observedAt.toISOString()
+          }
+        });
+      }
       const [observationsCount, anomaliesCount] = await Promise.all([
         tx.inventoryObservation.count({ where: { campaignId } }),
         tx.inventoryAnomaly.count({ where: { campaignId } })
@@ -365,7 +424,8 @@ export class InventoryCampaignsService {
         entityType: "inventory_campaign",
         entityId: campaignId,
         metadata: {
-          missingCount: missingItems.length
+          missingCount: missingItems.length,
+          inventoriedEquipmentCount: latestObservationByEquipment.size
         }
       });
     });
@@ -415,17 +475,17 @@ export class InventoryCampaignsService {
         .map((observation) => this.normalizeSpatialNodeReference(observation.activeSpatialNodeId ?? input.activeSpatialNodeId))
         .filter((reference): reference is string => Boolean(reference))
     );
-    const resolvedSpatialNodeIds = new Map<string, string>();
+    const resolvedSpatialNodes = new Map<string, CampaignWithDetails["scopes"][number]["spatialNode"]>();
     for (const activeNodeReference of activeNodeReferences) {
       const node = await this.ensureNodeInCampaign(auth.organizationId, campaign, activeNodeReference);
-      resolvedSpatialNodeIds.set(activeNodeReference, node.id);
+      resolvedSpatialNodes.set(activeNodeReference, node);
     }
-    const resolveObservedSpatialNodeId = (reference: string | null | undefined) => {
+    const resolveObservedSpatialNode = (reference: string | null | undefined) => {
       const normalized = this.normalizeSpatialNodeReference(reference);
-      return normalized ? (resolvedSpatialNodeIds.get(normalized) ?? null) : null;
+      return normalized ? (resolvedSpatialNodes.get(normalized) ?? null) : null;
     };
-    const activeSpatialNodeId = resolveObservedSpatialNodeId(input.activeSpatialNodeId);
-    if (!activeSpatialNodeId) {
+    const activeSpatialNode = resolveObservedSpatialNode(input.activeSpatialNodeId);
+    if (!activeSpatialNode) {
       throw new BadRequestException("Noeud spatial scanne inconnu");
     }
 
@@ -442,6 +502,11 @@ export class InventoryCampaignsService {
         },
         include: {
           equipment: true,
+          expectedItem: {
+            include: {
+              expectedSpatialNode: true
+            }
+          },
           observedSpatialNode: true,
           createdBy: true
         }
@@ -460,7 +525,7 @@ export class InventoryCampaignsService {
           organizationId: auth.organizationId,
           campaignId,
           userId: auth.sub,
-          activeSpatialNodeId,
+          activeSpatialNodeId: activeSpatialNode.id,
           clientBatchId: input.clientBatchId,
           payload: input as unknown as Prisma.InputJsonValue
         }
@@ -469,6 +534,11 @@ export class InventoryCampaignsService {
       const created: Array<Prisma.InventoryObservationGetPayload<{
         include: {
           equipment: true;
+          expectedItem: {
+            include: {
+              expectedSpatialNode: true;
+            };
+          };
           observedSpatialNode: true;
           createdBy: true;
         };
@@ -481,6 +551,11 @@ export class InventoryCampaignsService {
           },
           include: {
             equipment: true,
+            expectedItem: {
+              include: {
+                expectedSpatialNode: true
+              }
+            },
             observedSpatialNode: true,
             createdBy: true
           }
@@ -490,18 +565,19 @@ export class InventoryCampaignsService {
           continue;
         }
 
+        const observedSpatialNode = resolveObservedSpatialNode(observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId);
         const decision = await this.decideObservation(tx, auth.organizationId, campaign, {
           scannedPayload: observationInput.scannedPayload,
-          activeSpatialNodeId: resolveObservedSpatialNodeId(observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId)
+          activeSpatialNodeId: observedSpatialNode?.id ?? null,
+          activeSpatialNodePath: observedSpatialNode?.path ?? null
         });
-        const observedSpatialNodeId = resolveObservedSpatialNodeId(observationInput.activeSpatialNodeId ?? input.activeSpatialNodeId);
         const observation = await tx.inventoryObservation.create({
           data: {
             organizationId: auth.organizationId,
             campaignId,
             expectedItemId: decision.expectedItemId,
             equipmentId: decision.equipmentId,
-            observedSpatialNodeId,
+            observedSpatialNodeId: observedSpatialNode?.id ?? null,
             syncBatchId: batch.id,
             clientObservationId: observationInput.clientObservationId,
             scannedPayload: observationInput.scannedPayload,
@@ -516,6 +592,11 @@ export class InventoryCampaignsService {
           },
           include: {
             equipment: true,
+            expectedItem: {
+              include: {
+                expectedSpatialNode: true
+              }
+            },
             observedSpatialNode: true,
             createdBy: true
           }
@@ -533,7 +614,7 @@ export class InventoryCampaignsService {
           });
         }
         if (decision.result !== InventoryObservationResult.MATCH) {
-          await tx.inventoryAnomaly.create({
+          const anomaly = await tx.inventoryAnomaly.create({
             data: {
               organizationId: auth.organizationId,
               campaignId,
@@ -543,12 +624,53 @@ export class InventoryCampaignsService {
               type: decision.result as unknown as InventoryAnomalyType,
               scannedCode: decision.scannedCode,
               expectedSpatialNodeId: decision.expectedSpatialNodeId,
-              observedSpatialNodeId,
+              observedSpatialNodeId: observedSpatialNode?.id ?? null,
               expectedSnapshot: decision.expectedSnapshot as Prisma.InputJsonValue | undefined,
               observedSnapshot: decision.observedSnapshot as Prisma.InputJsonValue | undefined,
-              notes: decision.message
+              notes: decision.message,
+              createdById: auth.sub
             }
           });
+          if (
+            decision.result === InventoryObservationResult.WRONG_LOCATION
+            && decision.equipmentId
+            && observedSpatialNode
+          ) {
+            const correction = await tx.inventoryCorrection.create({
+              data: {
+                organizationId: auth.organizationId,
+                campaignId,
+                anomalyId: anomaly.id,
+                equipmentId: decision.equipmentId,
+                correctionType: InventoryCorrectionType.LOCATION_CHANGE,
+                targetSpatialNodeId: observedSpatialNode.id,
+                notes: "Correction de localisation proposee automatiquement depuis l inventaire terrain",
+                fromSnapshot: decision.expectedSnapshot as Prisma.InputJsonValue | undefined,
+                toSnapshot: {
+                  targetSpatialNodeId: observedSpatialNode.id,
+                  targetSpatialPath: observedSpatialNode.path,
+                  sourceObservationId: observation.id,
+                  sourceResult: decision.result
+                },
+                proposedById: auth.sub
+              }
+            });
+            await this.auditService.log({
+              db: tx,
+              organizationId: auth.organizationId,
+              userId: auth.sub,
+              action: "inventory_correction.proposed",
+              entityType: "inventory_correction",
+              entityId: correction.id,
+              metadata: {
+                correctionType: correction.correctionType,
+                campaignId,
+                observationId: observation.id,
+                equipmentId: decision.equipmentId,
+                targetSpatialNodeId: observedSpatialNode.id
+              }
+            });
+          }
         }
       }
 
@@ -604,7 +726,7 @@ export class InventoryCampaignsService {
     }
     const spatialNode = await this.ensureNodeInCampaign(auth.organizationId, campaign, input.spatialNodeId);
     const missingItems = campaign.expectedItems.filter(
-      (item) => item.expectedSpatialNodeId === spatialNode.id && !item.isSeen
+      (item) => this.expectedItemMatchesSpatialNode(item, spatialNode.id, spatialNode.path) && !item.isSeen
     );
     const existingMissing = missingItems.length
       ? await this.prisma.inventoryAnomaly.findMany({
@@ -634,7 +756,7 @@ export class InventoryCampaignsService {
             type: InventoryAnomalyType.MISSING,
             expectedSpatialNodeId: item.expectedSpatialNodeId ?? null,
             expectedSnapshot: item.equipmentSnapshot as Prisma.InputJsonValue,
-            notes: "Equipement attendu non observe a la fin de piece",
+            notes: "Equipement attendu non observe a la fin du noeud actif",
             createdById: auth.sub
           }))
         });
@@ -763,6 +885,21 @@ export class InventoryCampaignsService {
     });
   }
 
+  private expectedItemMatchesSpatialNode(
+    item: CampaignWithDetails["expectedItems"][number],
+    spatialNodeId: string | null,
+    spatialNodePath: string | null
+  ) {
+    if (spatialNodeId && item.expectedSpatialNodeId === spatialNodeId) {
+      return true;
+    }
+    const expectedPath = item.expectedSpatialPath ?? item.expectedSpatialNode?.path ?? item.equipment.currentSpatialNode?.path ?? null;
+    if (!expectedPath || !spatialNodePath) {
+      return false;
+    }
+    return expectedPath === spatialNodePath || expectedPath.startsWith(`${spatialNodePath}/`);
+  }
+
   private snapshotEquipment(equipment: EquipmentWithRefs) {
     return {
       equipmentId: equipment.id,
@@ -771,6 +908,8 @@ export class InventoryCampaignsService {
       externalRef: equipment.externalRef ?? null,
       typeLabel: equipment.equipmentType.label,
       familyLabel: equipment.equipmentType.subfamily.family.label,
+      brandLabel: equipment.equipmentModel?.brand.label ?? null,
+      modelLabel: equipment.equipmentModel?.label ?? null,
       statusLabel: equipment.equipmentStatus.label,
       ownerLabel: equipment.ownerEntity.label,
       immobilizationCode: equipment.immobilization?.code ?? null,
@@ -824,6 +963,7 @@ export class InventoryCampaignsService {
         spatialNodeId: scope.spatialNodeId,
         spatialPath: scope.spatialNode.path,
         spatialLabel: scope.spatialNode.label,
+        spatialType: scope.spatialNode.type,
         includeChildren: scope.includeChildren
       })),
       familyFilters: campaign.familyFilters.map((filter) => ({
@@ -842,13 +982,18 @@ export class InventoryCampaignsService {
       id: equipment.id,
       equipmentId: equipment.id,
       internalCode: equipment.internalCode,
+      numPiece: equipment.numPiece ?? null,
       label: equipment.equipmentModel?.label ?? equipment.equipmentType.label,
       familyLabel: equipment.equipmentType.subfamily.family.label,
       typeLabel: equipment.equipmentType.label,
+      brandLabel: equipment.equipmentModel?.brand.label ?? null,
+      modelLabel: equipment.equipmentModel?.label ?? null,
       statusLabel: equipment.equipmentStatus.label,
       ownerLabel: equipment.ownerEntity.label,
       immobilizationCode: equipment.immobilization?.code ?? null,
       expectedSpatialNodeId: equipment.currentSpatialNodeId ?? null,
+      expectedSpatialLabel: equipment.currentSpatialNode?.label ?? null,
+      expectedSpatialType: equipment.currentSpatialNode?.type ?? null,
       expectedSpatialPath: equipment.currentSpatialNode?.path ?? null,
       isSeen: false,
       seenAt: null
@@ -860,13 +1005,18 @@ export class InventoryCampaignsService {
       id: item.id,
       equipmentId: item.equipmentId,
       internalCode: item.equipment.internalCode,
+      numPiece: item.equipment.numPiece ?? null,
       label: item.equipment.equipmentModel?.label ?? item.equipment.equipmentType.label,
       familyLabel: item.equipment.equipmentType.subfamily.family.label,
       typeLabel: item.equipment.equipmentType.label,
+      brandLabel: item.equipment.equipmentModel?.brand.label ?? null,
+      modelLabel: item.equipment.equipmentModel?.label ?? null,
       statusLabel: item.equipment.equipmentStatus.label,
       ownerLabel: item.equipment.ownerEntity.label,
       immobilizationCode: item.equipment.immobilization?.code ?? null,
       expectedSpatialNodeId: item.expectedSpatialNodeId ?? null,
+      expectedSpatialLabel: item.expectedSpatialNode?.label ?? item.equipment.currentSpatialNode?.label ?? null,
+      expectedSpatialType: item.expectedSpatialNode?.type ?? item.equipment.currentSpatialNode?.type ?? null,
       expectedSpatialPath: item.expectedSpatialPath ?? item.expectedSpatialNode?.path ?? null,
       isSeen: item.isSeen,
       seenAt: item.seenAt?.toISOString() ?? null
@@ -884,6 +1034,11 @@ export class InventoryCampaignsService {
     result: InventoryObservationResult;
     equipmentId: string | null;
     equipment?: { internalCode: string } | null;
+    expectedItem?: {
+      expectedSpatialNodeId: string | null;
+      expectedSpatialPath: string | null;
+      expectedSpatialNode?: { path: string } | null;
+    } | null;
     observedSpatialNodeId: string | null;
     observedSpatialNode?: { path: string } | null;
     comment: string | null;
@@ -902,8 +1057,11 @@ export class InventoryCampaignsService {
       result: observation.result,
       equipmentId: observation.equipmentId,
       equipmentInternalCode: observation.equipment?.internalCode ?? null,
+      expectedSpatialNodeId: observation.expectedItem?.expectedSpatialNodeId ?? null,
+      expectedSpatialPath: observation.expectedItem?.expectedSpatialPath ?? observation.expectedItem?.expectedSpatialNode?.path ?? null,
       observedSpatialNodeId: observation.observedSpatialNodeId,
       observedSpatialPath: observation.observedSpatialNode?.path ?? null,
+      correctionProposed: observation.result === InventoryObservationResult.WRONG_LOCATION,
       comment: observation.comment,
       clientObservedAt: observation.clientObservedAt?.toISOString() ?? null,
       observedAt: observation.observedAt.toISOString(),
@@ -915,7 +1073,7 @@ export class InventoryCampaignsService {
     db: DbClient,
     organizationId: string,
     campaign: CampaignWithDetails,
-    input: { scannedPayload: string; activeSpatialNodeId: string | null }
+    input: { scannedPayload: string; activeSpatialNodeId: string | null; activeSpatialNodePath: string | null }
   ) {
     const scannedCode = this.extractEquipmentCode(input.scannedPayload);
     if (!scannedCode) {
@@ -950,12 +1108,7 @@ export class InventoryCampaignsService {
         equipmentId: equipment.id
       }
     });
-    const expectedItem = await db.inventoryCampaignExpectedItem.findFirst({
-      where: {
-        campaignId: campaign.id,
-        equipmentId: equipment.id
-      }
-    });
+    const expectedItem = campaign.expectedItems.find((item) => item.equipmentId === equipment.id) ?? null;
     if (duplicate) {
       return {
         result: InventoryObservationResult.DUPLICATE,
@@ -980,10 +1133,9 @@ export class InventoryCampaignsService {
         message: "Equipement hors perimetre de campagne"
       };
     }
-    const result =
-      expectedItem.expectedSpatialNodeId === input.activeSpatialNodeId
-        ? InventoryObservationResult.MATCH
-        : InventoryObservationResult.WRONG_LOCATION;
+    const result = this.expectedItemMatchesSpatialNode(expectedItem, input.activeSpatialNodeId, input.activeSpatialNodePath)
+      ? InventoryObservationResult.MATCH
+      : InventoryObservationResult.WRONG_LOCATION;
     return {
       result,
       scannedCode,
@@ -993,7 +1145,8 @@ export class InventoryCampaignsService {
       expectedSnapshot: expectedItem.equipmentSnapshot,
       observedSnapshot: {
         ...this.snapshotEquipment(equipment),
-        observedSpatialNodeId: input.activeSpatialNodeId
+        observedSpatialNodeId: input.activeSpatialNodeId,
+        observedSpatialPath: input.activeSpatialNodePath
       },
       message: result === InventoryObservationResult.MATCH ? "Equipement conforme" : "Equipement observe dans une autre localisation"
     };
@@ -1044,7 +1197,9 @@ export class InventoryCampaignsService {
     if (!normalizedReference) {
       throw new BadRequestException("Noeud spatial scanne inconnu");
     }
-    const node = await this.resolveSpatialNodeReference(organizationId, normalizedReference);
+    const node =
+      await this.resolveSpatialNodeReference(organizationId, normalizedReference)
+      ?? this.resolveCampaignNodeByRoomNumber(campaign, normalizedReference);
     if (!node) {
       throw new BadRequestException("Noeud spatial scanne inconnu");
     }
@@ -1059,6 +1214,18 @@ export class InventoryCampaignsService {
       throw new BadRequestException("Noeud spatial hors perimetre de campagne");
     }
     return node;
+  }
+
+  private resolveCampaignNodeByRoomNumber(campaign: CampaignWithDetails, roomNumber: string) {
+    const matches = campaign.expectedItems
+      .filter((item) => item.equipment.numPiece?.trim() === roomNumber)
+      .map((item) => item.expectedSpatialNode ?? item.equipment.currentSpatialNode ?? null)
+      .filter((node): node is NonNullable<CampaignWithDetails["expectedItems"][number]["expectedSpatialNode"]> => Boolean(node));
+    const uniqueById = new Map(matches.map((node) => [node.id, node]));
+    if (uniqueById.size > 1) {
+      throw new BadRequestException("Reference de piece ambigue dans la campagne");
+    }
+    return [...uniqueById.values()][0] ?? null;
   }
 
   private async resolveSpatialNodeReference(organizationId: string, reference: string) {

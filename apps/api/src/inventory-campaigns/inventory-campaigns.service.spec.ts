@@ -1,4 +1,4 @@
-import { InventoryAnomalyType, InventoryCampaignStatus } from "@prisma/client";
+import { InventoryAnomalyType, InventoryCampaignStatus, InventoryCorrectionType, InventoryObservationResult } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import { InventoryCampaignsService } from "./inventory-campaigns.service";
 
@@ -72,6 +72,7 @@ function createCampaign() {
         equipment: {
           id: "equipment-1",
           internalCode: "AST-001",
+          numPiece: "B520",
           equipmentType: {
             label: "Bureau",
             subfamily: {
@@ -91,6 +92,7 @@ function createCampaign() {
           },
           currentSpatialNodeId: "node-1",
           currentSpatialNode: {
+            id: "node-1",
             path: "SITE/B101"
           },
           immobilization: null
@@ -110,6 +112,7 @@ function createCampaign() {
         equipment: {
           id: "equipment-2",
           internalCode: "AST-002",
+          numPiece: "B520",
           equipmentType: {
             label: "Armoire",
             subfamily: {
@@ -129,12 +132,71 @@ function createCampaign() {
           },
           currentSpatialNodeId: "node-1",
           currentSpatialNode: {
+            id: "node-1",
             path: "SITE/B101"
           },
           immobilization: null
         }
       }
     ]
+  };
+}
+
+function createContainerCampaign() {
+  const campaign = createCampaign();
+  const floorNode = {
+    ...campaign.scopes[0].spatialNode,
+    id: "floor-1",
+    type: "FLOOR",
+    code: "R5",
+    label: "Etage R+5",
+    path: "SITE/R5",
+    depth: 1
+  };
+  const roomB521 = {
+    ...campaign.scopes[0].spatialNode,
+    id: "room-b521",
+    type: "ROOM",
+    code: "B521",
+    label: "Bureau B521",
+    path: "SITE/R5/B521",
+    depth: 2,
+    parentId: "floor-1"
+  };
+  const roomB522 = {
+    ...roomB521,
+    id: "room-b522",
+    code: "B522",
+    label: "Bureau B522",
+    path: "SITE/R5/B522"
+  };
+  campaign.scopes = [
+    {
+      ...campaign.scopes[0],
+      spatialNodeId: "floor-1",
+      spatialNode: floorNode
+    }
+  ];
+  campaign.expectedItems = campaign.expectedItems.map((item, index) => {
+    const room = index === 0 ? roomB521 : roomB522;
+    return {
+      ...item,
+      expectedSpatialNodeId: room.id,
+      expectedSpatialPath: room.path,
+      expectedSpatialNode: room,
+      equipment: {
+        ...item.equipment,
+        currentSpatialNodeId: room.id,
+        currentSpatialNode: room,
+        numPiece: room.code
+      }
+    };
+  });
+  return {
+    campaign,
+    floorNode,
+    roomB521,
+    roomB522
   };
 }
 
@@ -190,7 +252,7 @@ describe("InventoryCampaignsService", () => {
         expect.objectContaining({
           expectedItemId: "expected-2",
           type: InventoryAnomalyType.MISSING,
-          notes: "Equipement attendu non observe a la fin de piece"
+          notes: "Equipement attendu non observe a la fin du noeud actif"
         })
       ]
     });
@@ -314,5 +376,448 @@ describe("InventoryCampaignsService", () => {
     );
     expect(result.observations[0]).toEqual(expect.objectContaining({ result: "MATCH", equipmentInternalCode: "AST-001" }));
     expect(tx.inventoryAnomaly.create).not.toHaveBeenCalled();
+  });
+
+  it("syncs with a room number as active spatial node reference", async () => {
+    const campaign = createCampaign();
+    const equipment = {
+      ...campaign.expectedItems[0].equipment,
+      externalRef: null,
+      immobilization: null
+    };
+    const tx = {
+      inventorySyncBatch: {
+        create: vi.fn(async () => ({ id: "batch-1" })),
+        update: vi.fn()
+      },
+      inventoryObservation: {
+        findFirst: vi.fn(async () => null),
+        create: vi.fn(async (args) => ({
+          id: "observation-1",
+          organizationId: "org-1",
+          campaignId: "campaign-1",
+          clientObservationId: args.data.clientObservationId,
+          scannedPayload: args.data.scannedPayload,
+          scannedCode: args.data.scannedCode,
+          scanSource: args.data.scanSource,
+          deviceHint: args.data.deviceHint,
+          result: args.data.result,
+          equipmentId: args.data.equipmentId,
+          observedSpatialNodeId: args.data.observedSpatialNodeId,
+          syncBatchId: "batch-1",
+          comment: null,
+          clientObservedAt: null,
+          observedAt: new Date("2026-06-29T12:00:00.000Z"),
+          createdById: "user-1",
+          equipment,
+          observedSpatialNode: campaign.scopes[0].spatialNode,
+          createdBy: { name: "Agent" }
+        })),
+        count: vi.fn(async () => 1)
+      },
+      equipment: {
+        findMany: vi.fn(async () => [equipment])
+      },
+      inventoryCampaignExpectedItem: {
+        findFirst: vi.fn(async () => campaign.expectedItems[0]),
+        update: vi.fn()
+      },
+      inventoryAnomaly: {
+        create: vi.fn(),
+        count: vi.fn(async () => 0)
+      },
+      inventoryCampaign: {
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      inventoryCampaign: {
+        findFirst: vi.fn(async () => campaign)
+      },
+      spatialNode: {
+        findMany: vi.fn(async () => [])
+      },
+      inventorySyncBatch: {
+        findFirst: vi.fn(async () => null)
+      },
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const audit = {
+      log: vi.fn()
+    };
+    const service = new InventoryCampaignsService(prisma as never, audit as never);
+
+    const result = await service.sync(
+      {
+        organizationId: "org-1",
+        sub: "user-1"
+      } as never,
+      "campaign-1",
+      {
+        clientBatchId: "client-batch-1",
+        activeSpatialNodeId: "B520",
+        observations: [
+          {
+            clientObservationId: "client-observation-1",
+            scannedPayload: "EQ:AST-001",
+            scanSource: "MANUAL"
+          }
+        ]
+      }
+    );
+
+    expect(tx.inventorySyncBatch.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          activeSpatialNodeId: "node-1"
+        })
+      })
+    );
+    expect(tx.inventoryObservation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          observedSpatialNodeId: "node-1",
+          result: "MATCH"
+        })
+      })
+    );
+    expect(result.observations[0]).toEqual(expect.objectContaining({ result: "MATCH", equipmentInternalCode: "AST-001" }));
+  });
+
+  it("matches an expected equipment when the active node is a containing floor", async () => {
+    const { campaign, floorNode } = createContainerCampaign();
+    const equipment = {
+      ...campaign.expectedItems[0].equipment,
+      externalRef: null,
+      immobilization: null
+    };
+    const tx = {
+      inventorySyncBatch: {
+        create: vi.fn(async () => ({ id: "batch-1" })),
+        update: vi.fn()
+      },
+      inventoryObservation: {
+        findFirst: vi.fn(async () => null),
+        create: vi.fn(async (args) => ({
+          id: "observation-1",
+          organizationId: "org-1",
+          campaignId: "campaign-1",
+          clientObservationId: args.data.clientObservationId,
+          scannedPayload: args.data.scannedPayload,
+          scannedCode: args.data.scannedCode,
+          scanSource: args.data.scanSource,
+          deviceHint: args.data.deviceHint,
+          result: args.data.result,
+          equipmentId: args.data.equipmentId,
+          observedSpatialNodeId: args.data.observedSpatialNodeId,
+          syncBatchId: "batch-1",
+          comment: null,
+          clientObservedAt: null,
+          observedAt: new Date("2026-06-29T12:00:00.000Z"),
+          createdById: "user-1",
+          equipment,
+          expectedItem: campaign.expectedItems[0],
+          observedSpatialNode: floorNode,
+          createdBy: { name: "Agent" }
+        })),
+        count: vi.fn(async () => 1)
+      },
+      equipment: {
+        findMany: vi.fn(async () => [equipment])
+      },
+      inventoryCampaignExpectedItem: {
+        update: vi.fn()
+      },
+      inventoryAnomaly: {
+        create: vi.fn(),
+        count: vi.fn(async () => 0)
+      },
+      inventoryCampaign: {
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      inventoryCampaign: {
+        findFirst: vi.fn(async () => campaign)
+      },
+      spatialNode: {
+        findMany: vi.fn(async () => [floorNode])
+      },
+      inventorySyncBatch: {
+        findFirst: vi.fn(async () => null)
+      },
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const audit = {
+      log: vi.fn()
+    };
+    const service = new InventoryCampaignsService(prisma as never, audit as never);
+
+    const result = await service.sync(
+      { organizationId: "org-1", sub: "user-1" } as never,
+      "campaign-1",
+      {
+        clientBatchId: "client-batch-1",
+        activeSpatialNodeId: "R5",
+        observations: [
+          {
+            clientObservationId: "client-observation-1",
+            scannedPayload: "EQ:AST-001",
+            scanSource: "MANUAL"
+          }
+        ]
+      }
+    );
+
+    expect(tx.inventoryObservation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          observedSpatialNodeId: "floor-1",
+          result: InventoryObservationResult.MATCH
+        })
+      })
+    );
+    expect(tx.inventoryAnomaly.create).not.toHaveBeenCalled();
+    expect(result.observations[0]).toEqual(
+      expect.objectContaining({
+        result: InventoryObservationResult.MATCH,
+        expectedSpatialPath: "SITE/R5/B521",
+        observedSpatialPath: "SITE/R5"
+      })
+    );
+  });
+
+  it("creates a wrong location anomaly and a proposed location correction", async () => {
+    const { campaign, roomB522 } = createContainerCampaign();
+    const equipment = {
+      ...campaign.expectedItems[0].equipment,
+      externalRef: null,
+      immobilization: null
+    };
+    const tx = {
+      inventorySyncBatch: {
+        create: vi.fn(async () => ({ id: "batch-1" })),
+        update: vi.fn()
+      },
+      inventoryObservation: {
+        findFirst: vi.fn(async () => null),
+        create: vi.fn(async (args) => ({
+          id: "observation-1",
+          organizationId: "org-1",
+          campaignId: "campaign-1",
+          clientObservationId: args.data.clientObservationId,
+          scannedPayload: args.data.scannedPayload,
+          scannedCode: args.data.scannedCode,
+          scanSource: args.data.scanSource,
+          deviceHint: args.data.deviceHint,
+          result: args.data.result,
+          equipmentId: args.data.equipmentId,
+          observedSpatialNodeId: args.data.observedSpatialNodeId,
+          syncBatchId: "batch-1",
+          comment: null,
+          clientObservedAt: null,
+          observedAt: new Date("2026-06-29T12:00:00.000Z"),
+          createdById: "user-1",
+          equipment,
+          expectedItem: campaign.expectedItems[0],
+          observedSpatialNode: roomB522,
+          createdBy: { name: "Agent" }
+        })),
+        count: vi.fn(async () => 1)
+      },
+      equipment: {
+        findMany: vi.fn(async () => [equipment])
+      },
+      inventoryCampaignExpectedItem: {
+        update: vi.fn()
+      },
+      inventoryAnomaly: {
+        create: vi.fn(async () => ({ id: "anomaly-1" })),
+        count: vi.fn(async () => 1)
+      },
+      inventoryCorrection: {
+        create: vi.fn(async () => ({ id: "correction-1", correctionType: InventoryCorrectionType.LOCATION_CHANGE }))
+      },
+      inventoryCampaign: {
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      inventoryCampaign: {
+        findFirst: vi.fn(async () => campaign)
+      },
+      spatialNode: {
+        findMany: vi.fn(async () => [roomB522])
+      },
+      inventorySyncBatch: {
+        findFirst: vi.fn(async () => null)
+      },
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const audit = {
+      log: vi.fn()
+    };
+    const service = new InventoryCampaignsService(prisma as never, audit as never);
+
+    const result = await service.sync(
+      { organizationId: "org-1", sub: "user-1" } as never,
+      "campaign-1",
+      {
+        clientBatchId: "client-batch-1",
+        activeSpatialNodeId: "B522",
+        observations: [
+          {
+            clientObservationId: "client-observation-1",
+            scannedPayload: "EQ:AST-001",
+            scanSource: "MANUAL"
+          }
+        ]
+      }
+    );
+
+    expect(tx.inventoryAnomaly.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: InventoryAnomalyType.WRONG_LOCATION,
+          equipmentId: "equipment-1",
+          expectedSpatialNodeId: "room-b521",
+          observedSpatialNodeId: "room-b522"
+        })
+      })
+    );
+    expect(tx.inventoryCorrection.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          anomalyId: "anomaly-1",
+          equipmentId: "equipment-1",
+          correctionType: InventoryCorrectionType.LOCATION_CHANGE,
+          targetSpatialNodeId: "room-b522"
+        })
+      })
+    );
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "inventory_correction.proposed"
+      })
+    );
+    expect(result.observations[0]).toEqual(
+      expect.objectContaining({
+        result: InventoryObservationResult.WRONG_LOCATION,
+        correctionProposed: true
+      })
+    );
+  });
+
+  it("completes a containing floor and creates missing anomalies for descendants", async () => {
+    const { campaign, floorNode } = createContainerCampaign();
+    const tx = {
+      inventoryAnomaly: {
+        createMany: vi.fn(async () => ({ count: 2 })),
+        count: vi.fn(async () => 2)
+      },
+      inventoryCampaign: {
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      inventoryCampaign: {
+        findFirst: vi.fn(async () => campaign)
+      },
+      spatialNode: {
+        findMany: vi.fn(async () => [floorNode])
+      },
+      inventoryAnomaly: {
+        findMany: vi.fn(async () => [])
+      },
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const audit = {
+      log: vi.fn()
+    };
+    const service = new InventoryCampaignsService(prisma as never, audit as never);
+
+    const result = await service.completeNode(
+      { organizationId: "org-1", sub: "user-1" } as never,
+      "campaign-1",
+      {
+        spatialNodeId: "R5"
+      }
+    );
+
+    expect(result.missingCreated).toBe(2);
+    expect(tx.inventoryAnomaly.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.arrayContaining([
+          expect.objectContaining({ expectedItemId: "expected-1" }),
+          expect.objectContaining({ expectedItemId: "expected-2" })
+        ])
+      })
+    );
+  });
+
+  it("updates last inventory date and writes equipment audit entries when closing", async () => {
+    const campaign = createCampaign();
+    const observedAt = new Date("2026-07-02T10:00:00.000Z");
+    const tx = {
+      inventoryAnomaly: {
+        createMany: vi.fn(async () => ({ count: 0 })),
+        count: vi.fn(async () => 0)
+      },
+      inventoryObservation: {
+        findMany: vi.fn(async () => [
+          {
+            id: "observation-1",
+            equipmentId: "equipment-1",
+            result: InventoryObservationResult.MATCH,
+            observedAt,
+            createdById: "agent-1"
+          }
+        ]),
+        count: vi.fn(async () => 1)
+      },
+      equipment: {
+        update: vi.fn()
+      },
+      inventoryCampaign: {
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      inventoryCampaign: {
+        findFirst: vi.fn(async () => campaign)
+      },
+      inventoryAnomaly: {
+        findMany: vi.fn(async () => campaign.expectedItems.map((item) => ({ expectedItemId: item.id })))
+      },
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const audit = {
+      log: vi.fn()
+    };
+    const service = new InventoryCampaignsService(prisma as never, audit as never);
+
+    await service.close({ organizationId: "org-1", sub: "supervisor-1" } as never, "campaign-1");
+
+    expect(tx.equipment.update).toHaveBeenCalledWith({
+      where: {
+        id: "equipment-1"
+      },
+      data: {
+        lastInventoryAt: observedAt
+      }
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "agent-1",
+        action: "inventory.equipment.observed",
+        entityType: "equipment",
+        entityId: "equipment-1"
+      })
+    );
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "inventory_campaign.closed"
+      })
+    );
   });
 });

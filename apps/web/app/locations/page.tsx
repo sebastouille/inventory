@@ -34,6 +34,34 @@ import { buildQueryString } from "@/lib/query-string";
 import { buildPathWithQuery } from "@/lib/url-query";
 import { useStoredToken } from "@/lib/session";
 
+function readSpatialIfcProperty(node: Pick<SpatialNodeListItem, "sourceMetadata">, candidates: string[]) {
+  const properties = node.sourceMetadata?.properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return null;
+  }
+  const entries = Object.entries(properties as Record<string, unknown>);
+  for (const candidate of candidates) {
+    const normalizedCandidate = candidate.toLowerCase();
+    const match = entries.find(([key]) => key.toLowerCase() === normalizedCandidate);
+    const value = match?.[1];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+  }
+  return null;
+}
+
+function buildRoomIfcDetails(node: Pick<SpatialNodeListItem, "type" | "sourceMetadata">) {
+  if (node.type !== "ROOM") {
+    return null;
+  }
+  const values = [
+    readSpatialIfcProperty(node, ["N\u00b0 de pi\u00e8ce", "N\u00b0 de piece", "N de piece", "No de piece", "Numero de piece", "Numero piece", "Room number"]),
+    readSpatialIfcProperty(node, ["Nom de zone", "Zone Name", "Name"]),
+    readSpatialIfcProperty(node, ["Nombre d'agent", "Nombre d agents", "Nombre d'agents", "Nombre personnes", "Occupation (result_occupancy)", "Nb agents", "Agents", "Occupants"])
+  ].filter((value): value is string => Boolean(value));
+  return values.length > 0 ? values.join(" - ") : null;
+}
+
 function LocationsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -296,7 +324,9 @@ function LocationsPageContent() {
                   {visibleTree.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Aucun noeud spatial disponible.</p>
                   ) : null}
-                  {visibleTree.map((node) => (
+                  {visibleTree.map((node) => {
+                    const roomIfcDetails = buildRoomIfcDetails(node);
+                    return (
                     <div
                       key={node.id}
                       className="flex cursor-pointer items-center justify-between rounded-xl border border-border/60 px-3 py-2 transition-colors hover:bg-muted/40"
@@ -327,6 +357,11 @@ function LocationsPageContent() {
                             settings={displaySettings}
                             className="flex-1 min-w-0"
                           />
+                          {roomIfcDetails ? (
+                            <span className="min-w-0 font-mono text-xs text-muted-foreground">
+                              {roomIfcDetails}
+                            </span>
+                          ) : null}
                           <StatusBadge status="neutral" label={node.type} />
                         </div>
                       </div>
@@ -335,7 +370,8 @@ function LocationsPageContent() {
                         label={node.isActive ? "Actif" : "Inactif"}
                       />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </PageSection>
 

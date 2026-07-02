@@ -47,6 +47,14 @@ type EquipmentForLabel = Prisma.EquipmentGetPayload<{
 type SpatialNodeForLabel = Prisma.SpatialNodeGetPayload<Record<string, never>>;
 
 const EXCLUDED_STATUS_CODES = new Set(["LOST", "PERDU", "SCRAPPED", "REBUT", "RETIRED", "ARCHIVED"]);
+const ROOM_NUMBER_PROPERTY_KEYS = [
+  "N\u00b0 de pi\u00e8ce",
+  "N\u00b0 de piece",
+  "No de piece",
+  "Numero de piece",
+  "Numero piece",
+  "Room number"
+];
 
 const CODE128_PATTERNS = [
   "212222", "222122", "222221", "121223", "121322", "131222", "122213", "122312", "132212", "221213",
@@ -119,11 +127,10 @@ export class LabelExportsService {
   async exportSpatialNodes(organizationId: string, input: LabelExportSpatialNodeQuery): Promise<ExportResult> {
     const preview = await this.previewSpatialNodes(organizationId, input);
     return this.buildExport("etiquettes-noeuds", input.format, preview.items.map((item) => ({
-      TypeNoeud: item.nodeType,
-      CodeNoeud: item.nodeCode,
-      LibelleNoeud: item.nodeLabel,
-      CheminSpatial: item.spatialPath,
-      PayloadCodeBarres: item.barcodePayload
+      path: item.spatialPath,
+      "N\u00b0 de pi\u00e8ce": item.roomNumber,
+      node: item.barcodePayload,
+      type: item.nodeType
     })), preview.items.map((item) => ({
       title: `${item.nodeType} ${item.nodeLabel}`.trim(),
       subtitle: item.spatialPath,
@@ -304,8 +311,35 @@ export class LabelExportsService {
       nodeCode: node.code,
       nodeLabel: node.label,
       spatialPath: node.path,
+      roomNumber: node.type === "ROOM" ? this.readSpatialNodeProperty(node.sourceMetadata, ROOM_NUMBER_PROPERTY_KEYS) : null,
       barcodePayload: `NODE:${node.id}`
     };
+  }
+
+  private readSpatialNodeProperty(sourceMetadata: Prisma.JsonValue, candidates: string[]) {
+    if (!sourceMetadata || typeof sourceMetadata !== "object" || Array.isArray(sourceMetadata)) {
+      return null;
+    }
+
+    const properties = (sourceMetadata as Record<string, unknown>).properties;
+    if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+      return null;
+    }
+
+    const normalizedCandidates = candidates.map((candidate) => candidate.toLocaleLowerCase("fr-FR"));
+    for (const [key, value] of Object.entries(properties as Record<string, unknown>)) {
+      if (!normalizedCandidates.includes(key.toLocaleLowerCase("fr-FR"))) {
+        continue;
+      }
+      if (typeof value === "string") {
+        return value.trim() || null;
+      }
+      if (typeof value === "number" || typeof value === "boolean") {
+        return String(value);
+      }
+    }
+
+    return null;
   }
 
   private buildExport(

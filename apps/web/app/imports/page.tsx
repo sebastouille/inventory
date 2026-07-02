@@ -260,9 +260,14 @@ function isDerivedStoreyGeometry(geometry: Ifc4SpatialPreviewNode["geometry"] | 
     || geometry?.geometrySource === "ifc-storey-derived-from-building";
 }
 
+function isDerivedZoneGeometry(geometry: Ifc4SpatialPreviewNode["geometry"] | Ifc4EquipmentPreviewRow["geometry"] | undefined | null) {
+  return geometry?.geometrySource === "ifc-zone-derived-from-spaces";
+}
+
 function geometryBadgeLabel(geometryOrStatus: string | Ifc4SpatialPreviewNode["geometry"] | Ifc4EquipmentPreviewRow["geometry"] | undefined | null) {
   const status = typeof geometryOrStatus === "string" ? geometryOrStatus : geometryOrStatus?.geometryStatus;
   if (typeof geometryOrStatus !== "string" && isDerivedStoreyGeometry(geometryOrStatus)) return "Etage derive";
+  if (typeof geometryOrStatus !== "string" && isDerivedZoneGeometry(geometryOrStatus)) return "Zone derivee";
   if (status === "READY") return "Geometrie OK";
   if (status === "ERROR") return "Erreur geometrie";
   return "Geometrie manquante";
@@ -285,6 +290,25 @@ function stringifyDiagnosticValue(value: unknown) {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function stringifyIfcValue(value: unknown) {
+  if (value == null || value === "") return "-";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function recordEntries(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [] as Array<[string, unknown]>;
+  }
+  return Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
 }
 
 function formatDetailedApiError(error: unknown, fallback: string) {
@@ -571,25 +595,39 @@ function propertyCandidateLabel(candidate: Ifc4PropertyCandidate) {
   return `${candidate.name}${sample} (${candidate.count})`;
 }
 
+function mappedPropertyValue(item: Ifc4EquipmentValidationRow, mapping: string | null | undefined) {
+  if (!mapping || mapping === NONE_VALUE) return "-";
+  return item.properties[mapping] ?? "-";
+}
+
+function buildMappedEquipmentFields(item: Ifc4EquipmentValidationRow, mappings: Ifc4EquipmentPropertyMappings) {
+  return [
+    { label: "Code interne", mapping: mappings.internalCode, sourceValue: mappedPropertyValue(item, mappings.internalCode), targetValue: item.internalCode },
+    { label: "Num piece", mapping: mappings.numPiece, sourceValue: mappedPropertyValue(item, mappings.numPiece), targetValue: item.numPiece ?? "-" },
+    { label: "Reference externe", mapping: mappings.externalRef, sourceValue: mappedPropertyValue(item, mappings.externalRef), targetValue: item.externalRef ?? "-" },
+    { label: "Categorie", mapping: mappings.category, sourceValue: mappedPropertyValue(item, mappings.category), targetValue: compactReferenceValue(item.classification.category) },
+    { label: "Famille", mapping: mappings.family, sourceValue: mappedPropertyValue(item, mappings.family), targetValue: compactReferenceValue(item.classification.family) },
+    { label: "Sous-famille", mapping: mappings.subfamily, sourceValue: mappedPropertyValue(item, mappings.subfamily), targetValue: compactReferenceValue(item.classification.subfamily) },
+    { label: "Type", mapping: mappings.type, sourceValue: mappedPropertyValue(item, mappings.type), targetValue: compactReferenceValue(item.classification.type) },
+    { label: "Marque", mapping: mappings.brand, sourceValue: mappedPropertyValue(item, mappings.brand), targetValue: compactReferenceValue(item.classification.brand) },
+    { label: "Modele", mapping: mappings.model, sourceValue: mappedPropertyValue(item, mappings.model), targetValue: compactReferenceValue(item.classification.model) },
+    { label: "Statut", mapping: mappings.status, sourceValue: mappedPropertyValue(item, mappings.status), targetValue: compactReferenceValue(item.classification.status) },
+    { label: "Proprietaire", mapping: mappings.owner, sourceValue: mappedPropertyValue(item, mappings.owner), targetValue: compactReferenceValue(item.classification.owner) }
+  ];
+}
+
 function IfcEquipmentValidationCard({
   item,
+  mappings,
   onOpen,
   indent = 0
 }: {
   item: Ifc4EquipmentValidationRow;
+  mappings: Ifc4EquipmentPropertyMappings;
   onOpen: (item: Ifc4EquipmentValidationRow) => void;
   indent?: number;
 }) {
-  const classificationRows = [
-    ["Categorie", item.classification.category],
-    ["Famille", item.classification.family],
-    ["Sous-famille", item.classification.subfamily],
-    ["Type", item.classification.type],
-    ["Marque", item.classification.brand],
-    ["Modele", item.classification.model],
-    ["Statut", item.classification.status],
-    ["Proprietaire", item.classification.owner]
-  ] as const;
+  const mappedRows = buildMappedEquipmentFields(item, mappings);
 
   return (
     <button
@@ -620,10 +658,13 @@ function IfcEquipmentValidationCard({
         </div>
       </div>
       <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-        {classificationRows.map(([label, reference]) => (
-          <div key={`${item.internalCode}-${label}`} className="rounded-lg border border-border/50 bg-background/70 px-3 py-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
-            <p className="mt-1 truncate text-sm text-foreground">{compactReferenceValue(reference)}</p>
+        {mappedRows.map((row) => (
+          <div key={`${item.internalCode}-${row.label}`} className="rounded-lg border border-border/50 bg-background/70 px-3 py-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{row.label}</p>
+            <p className="mt-1 truncate text-sm text-foreground">{row.targetValue}</p>
+            <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+              {row.mapping ? `${row.mapping}: ${row.sourceValue}` : "mapping: -"}
+            </p>
           </div>
         ))}
       </div>
@@ -633,6 +674,66 @@ function IfcEquipmentValidationCard({
         </div>
       ) : null}
     </button>
+  );
+}
+
+function IfcPropertyTree({
+  title,
+  value,
+  defaultOpen = false
+}: {
+  title: string;
+  value: unknown;
+  defaultOpen?: boolean;
+}) {
+  const entries = recordEntries(value);
+
+  return (
+    <details className="rounded-xl border border-border/60 bg-background/70 p-3" open={defaultOpen}>
+      <summary className="cursor-pointer text-sm font-semibold text-foreground">
+        {title}
+        {entries.length > 0 ? <span className="ml-2 text-xs font-normal text-muted-foreground">({entries.length})</span> : null}
+      </summary>
+      <div className="mt-3 space-y-2">
+        {entries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Aucune donnee disponible.</p>
+        ) : (
+          entries.map(([key, entryValue]) => <IfcPropertyTreeNode key={key} name={key} value={entryValue} depth={0} />)
+        )}
+      </div>
+    </details>
+  );
+}
+
+function IfcPropertyTreeNode({ name, value, depth }: { name: string; value: unknown; depth: number }) {
+  const isObject = Boolean(value && typeof value === "object");
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item] as [string, unknown])
+    : recordEntries(value);
+
+  if (!isObject || entries.length === 0) {
+    return (
+      <div className="grid gap-2 rounded-lg border border-border/50 bg-card/40 px-3 py-2 md:grid-cols-[minmax(180px,260px)_1fr]">
+        <p className="break-words font-mono text-xs font-semibold text-muted-foreground" style={{ paddingLeft: depth * 12 }}>
+          {name}
+        </p>
+        <p className="whitespace-pre-wrap break-words text-sm text-foreground">{stringifyIfcValue(value)}</p>
+      </div>
+    );
+  }
+
+  return (
+    <details className="rounded-lg border border-border/50 bg-card/40 px-3 py-2" open={depth < 1}>
+      <summary className="cursor-pointer font-mono text-xs font-semibold text-muted-foreground" style={{ paddingLeft: depth * 12 }}>
+        {name}
+        <span className="ml-2 font-normal">({entries.length})</span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        {entries.map(([key, entryValue]) => (
+          <IfcPropertyTreeNode key={`${name}-${key}`} name={key} value={entryValue} depth={depth + 1} />
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -698,6 +799,7 @@ function ImportsPageContent() {
   const [ifcEquipmentPage, setIfcEquipmentPage] = useState(1);
   const [ifcEquipmentAnomalyPage, setIfcEquipmentAnomalyPage] = useState(1);
   const [selectedIfcEquipment, setSelectedIfcEquipment] = useState<Ifc4EquipmentValidationRow | null>(null);
+  const [selectedIfcSpatialNode, setSelectedIfcSpatialNode] = useState<Ifc4SpatialPreviewNode | null>(null);
   const [spatialDisplay, setSpatialDisplay] = useState<OrganizationSpatialDisplaySettings | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [urlSelectionReady, setUrlSelectionReady] = useState(false);
@@ -1198,18 +1300,30 @@ function ImportsPageContent() {
       setSelectedIfcAssistantProfileId("none");
       return;
     }
-    const profile = await apiFetch<Ifc4AssistantProfileDetail>(`/imports/ifc4/profiles/${profileId}`);
-    setSelectedIfcAssistantProfileId(profile.id);
-    setIfcAssistantProfileName(profile.name);
-    setIfcSelectedClasses(profile.selectedClasses.length > 0 ? profile.selectedClasses : ["IFCFURNITURE"]);
-    setIfcEquipmentPropertyMappings(profile.equipmentMappings ?? DEFAULT_IFC_EQUIPMENT_PROPERTY_MAPPINGS);
-    setIfcGeometryLevel(profile.geometryLevel);
-    setIfcMaxProducts(String(profile.maxProducts));
-    setIfcMaxShapeParts(String(profile.maxShapeParts));
-    setIfcImportPolicy(profile.importPolicy);
-    setIfcSpatialTypeOverrides(Object.fromEntries(profile.spatialTypeOverrides.map((item) => [item.path, item.type as SpatialNodeType])));
-    setIfcAssetResourceOverrides(Object.fromEntries(profile.assetReferenceOverrides.map((item) => [`${item.resource}:${item.code}`, item.nextResource])));
-    setActionNotice(`Profil IFC4 applique : ${profile.name}`);
+    setBusyAction("ifc-profile-apply");
+    setActionError(null);
+    try {
+      const profile = await apiFetch<Ifc4AssistantProfileDetail>(`/imports/ifc4/profiles/${profileId}`);
+      setSelectedIfcAssistantProfileId(profile.id);
+      setIfcAssistantProfileName(profile.name);
+      setIfcSelectedClasses(profile.selectedClasses.length > 0 ? profile.selectedClasses : ["IFCFURNITURE"]);
+      setIfcEquipmentPropertyMappings(profile.equipmentMappings ?? DEFAULT_IFC_EQUIPMENT_PROPERTY_MAPPINGS);
+      setIfcGeometryLevel(profile.geometryLevel);
+      setIfcMaxProducts(String(profile.maxProducts));
+      setIfcMaxShapeParts(String(profile.maxShapeParts));
+      setIfcImportPolicy(profile.importPolicy);
+      setIfcSpatialTypeOverrides(Object.fromEntries(profile.spatialTypeOverrides.map((item) => [item.path, item.type as SpatialNodeType])));
+      setIfcAssetResourceOverrides(Object.fromEntries(profile.assetReferenceOverrides.map((item) => [`${item.resource}:${item.code}`, item.nextResource])));
+      setActionNotice(`Profil IFC4 applique : ${profile.name}`);
+    } catch (error) {
+      if (isUnauthorizedApiError(error)) {
+        setActionError("Session expiree. Reconnecte-toi puis recharge la page.");
+        return;
+      }
+      setActionError(formatDetailedApiError(error, "Impossible d appliquer le profil IFC4"));
+    } finally {
+      setBusyAction(null);
+    }
   }, []);
 
   const saveIfcAssistantProfile = useCallback(async (mode: "create" | "update") => {
@@ -2314,53 +2428,6 @@ function ImportsPageContent() {
                             </div>
                           ) : null}
                         </div>
-                        <div className="grid gap-4 rounded-xl border border-border/60 bg-muted/10 p-4 lg:grid-cols-[1fr_1fr_auto_auto]">
-                          <Field label="Profil IFC4 sauvegarde">
-                            <Select value={selectedIfcAssistantProfileId} onValueChange={(value) => void applyIfcAssistantProfile(value ?? "none")}>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Aucun profil IFC4" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="none">Aucun profil IFC4</SelectItem>
-                                {ifcAssistantProfiles.map((profile) => (
-                                  <SelectItem key={profile.id} value={profile.id}>
-                                    {profile.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </Field>
-                          <Field label="Nom du profil">
-                            <Input
-                              value={ifcAssistantProfileName}
-                              onChange={(event) => setIfcAssistantProfileName(event.target.value)}
-                              placeholder="Profil mobilier Archicad"
-                            />
-                          </Field>
-                          <div className="flex items-end">
-                            <Button
-                              variant="outline"
-                              disabled={!hasImportsManage || busyAction !== null}
-                              onClick={() => void saveIfcAssistantProfile("create")}
-                            >
-                              <SaveIcon className="size-4" />
-                              Enregistrer
-                            </Button>
-                          </div>
-                          <div className="flex items-end">
-                            <Button
-                              variant="outline"
-                              disabled={!hasImportsManage || !selectedIfcAssistantProfile || busyAction !== null}
-                              onClick={() => void saveIfcAssistantProfile("update")}
-                            >
-                              <SaveIcon className="size-4" />
-                              Mettre a jour
-                            </Button>
-                          </div>
-                          <p className="text-sm text-muted-foreground lg:col-span-4">
-                            Le profil IFC4 sauvegarde les classes, proprietes, mappings equipements, overrides spatial/referentiels et politique d import.
-                          </p>
-                        </div>
                         <Field label="Classes IFC a analyser">
                           {ifcClassSelectionItems.length === 0 ? (
                             <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
@@ -2499,10 +2566,11 @@ function ImportsPageContent() {
                           <FormSection title="Diagnostics geometrie IFC" description="Objets importables et objets a corriger avant import." className="p-4" columns={1}>
                             {ifcGeometryDiagnostics ? (
                               <div className="space-y-4">
-                                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-7">
+                                <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
                                   <ReadOnlyField label="Total" value={formatNumber(ifcGeometryDiagnostics.summary.total)} />
                                   <ReadOnlyField label="OK" value={formatNumber(ifcGeometryDiagnostics.summary.ready)} />
                                   <ReadOnlyField label="Etages derives" value={formatNumber(ifcGeometryDiagnostics.summary.derivedStoreys)} />
+                                  <ReadOnlyField label="Zones derivees" value={formatNumber(ifcGeometryDiagnostics.summary.derivedZones)} />
                                   <ReadOnlyField label="Manquants" value={formatNumber(ifcGeometryDiagnostics.summary.missing)} />
                                   <ReadOnlyField label="Erreurs" value={formatNumber(ifcGeometryDiagnostics.summary.errors)} />
                                   <ReadOnlyField label="Parents invalides" value={formatNumber(ifcGeometryDiagnostics.summary.blockedByParent)} />
@@ -2631,11 +2699,12 @@ function ImportsPageContent() {
                                           <button
                                             type="button"
                                             className="min-w-0 flex-1 text-left"
-                                            onClick={() =>
+                                            onClick={() => {
                                               setIfcSelectedSpatialPath((current) =>
                                                 current === item.path ? null : item.path
-                                              )
-                                            }
+                                              );
+                                              setSelectedIfcSpatialNode(item);
+                                            }}
                                           >
                                             <SpatialNodeTitle
                                               type={effectiveType}
@@ -2712,6 +2781,7 @@ function ImportsPageContent() {
                                             <IfcEquipmentValidationCard
                                               key={`${equipment.sourceClass}-${equipment.internalCode}-${equipment.rowIndex}`}
                                               item={equipment}
+                                              mappings={ifcEquipmentPropertyMappings}
                                               onOpen={setSelectedIfcEquipment}
                                             />
                                           ))}
@@ -2941,22 +3011,61 @@ function ImportsPageContent() {
                               </div>
                             ) : null}
                             <div className="mb-4 rounded-xl border border-border/60 bg-background/70 p-4">
-                              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                                <div>
-                                  <p className="font-semibold text-foreground">Mapping des proprietes IFC</p>
-                                  <p className="mt-1 text-sm text-muted-foreground">
-                                    Associe les proprietes IfcPropertySingleValue detectees aux champs metier equipement,
-                                    puis clique sur Actualiser le mapping pour recalculer la preview.
-                                  </p>
+                              <div>
+                                <p className="font-semibold text-foreground">Mapping des proprietes IFC</p>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  Associe les proprietes IfcPropertySingleValue detectees aux champs metier equipement,
+                                  puis clique sur Actualiser le mapping pour recalculer la preview.
+                                </p>
+                              </div>
+                              <div className="mt-4 grid gap-4 rounded-xl border border-border/60 bg-muted/10 p-4 lg:grid-cols-[1fr_1fr_auto_auto]">
+                                <Field label="Profil IFC4 sauvegarde">
+                                  <Select value={selectedIfcAssistantProfileId} onValueChange={(value) => void applyIfcAssistantProfile(value ?? "none")}>
+                                    <SelectTrigger>
+                                      <SelectValue placeholder="Aucun profil IFC4">
+                                        {selectedIfcAssistantProfile?.name ?? "Aucun profil IFC4"}
+                                      </SelectValue>
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Aucun profil IFC4</SelectItem>
+                                      {ifcAssistantProfiles.map((profile) => (
+                                        <SelectItem key={profile.id} value={profile.id}>
+                                          {profile.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </Field>
+                                <Field label="Nom du profil">
+                                  <Input
+                                    value={ifcAssistantProfileName}
+                                    onChange={(event) => setIfcAssistantProfileName(event.target.value)}
+                                    placeholder="Profil mobilier Archicad"
+                                  />
+                                </Field>
+                                <div className="flex items-end">
+                                  <Button
+                                    variant="outline"
+                                    disabled={!hasImportsManage || busyAction !== null}
+                                    onClick={() => void saveIfcAssistantProfile("create")}
+                                  >
+                                    <SaveIcon className="size-4" />
+                                    Enregistrer
+                                  </Button>
                                 </div>
-                                <Button
-                                  variant="outline"
-                                  disabled={!hasImportsExecute || !ifcAnalysisJobId || !ifcSpatialStepReady || !ifcAssetReferencesReady || busyAction !== null}
-                                  onClick={() => void runIfc4WorkflowAction("equipments", "preview")}
-                                >
-                                  <RefreshCwIcon className="size-4" />
-                                  Recalculer la preview equipements
-                                </Button>
+                                <div className="flex items-end">
+                                  <Button
+                                    variant="outline"
+                                    disabled={!hasImportsManage || !selectedIfcAssistantProfile || busyAction !== null}
+                                    onClick={() => void saveIfcAssistantProfile("update")}
+                                  >
+                                    <SaveIcon className="size-4" />
+                                    Mettre a jour
+                                  </Button>
+                                </div>
+                                <p className="text-sm text-muted-foreground lg:col-span-4">
+                                  Le profil IFC4 sauvegarde les classes, proprietes, mappings equipements, overrides spatial/referentiels et politique d import.
+                                </p>
                               </div>
                               {ifcPropertyCandidates.length === 0 ? (
                                 <p className="mt-4 text-sm text-muted-foreground">
@@ -3000,6 +3109,16 @@ function ImportsPageContent() {
                                   })}
                                 </div>
                               )}
+                              <div className="mt-4 flex justify-end">
+                                <Button
+                                  variant="outline"
+                                  disabled={!hasImportsExecute || !ifcAnalysisJobId || !ifcSpatialStepReady || !ifcAssetReferencesReady || busyAction !== null}
+                                  onClick={() => void runIfc4WorkflowAction("equipments", "preview")}
+                                >
+                                  <RefreshCwIcon className="size-4" />
+                                  Recalculer la preview equipements
+                                </Button>
+                              </div>
                             </div>
                             <div className="mb-4 grid gap-3 md:grid-cols-3">
                               <ReadOnlyField label="Equipements candidats" value={formatNumber(ifcEquipmentValidationRows.length)} />
@@ -3030,13 +3149,23 @@ function ImportsPageContent() {
                                 {
                                   key: "equipment",
                                   label: "Equipement",
-                                  render: (item) => (
-                                    <div>
-                                      <p className="font-medium text-foreground">{item.label ?? item.internalCode}</p>
-                                      <p className="font-mono text-xs text-muted-foreground">{item.internalCode}</p>
-                                      {item.numPiece ? <p className="text-xs text-muted-foreground">Piece : {item.numPiece}</p> : null}
-                                    </div>
-                                  )
+                                  render: (item) => {
+                                    const mappedRows = buildMappedEquipmentFields(item, ifcEquipmentPropertyMappings);
+                                    return (
+                                      <div className="space-y-1">
+                                        <p className="font-mono text-sm font-semibold text-foreground">{item.internalCode}</p>
+                                        <p className="text-xs text-muted-foreground">Libelle IFC : {item.label ?? "-"}</p>
+                                        <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                                          {mappedRows.slice(0, 3).map((row) => (
+                                            <p key={`${item.rowIndex}-${row.label}`} className="truncate">
+                                              {row.label} : <span className="font-mono text-foreground">{row.targetValue}</span>
+                                              {row.mapping ? <span> depuis {row.mapping}</span> : null}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  }
                                 },
                                 {
                                   key: "component",
@@ -3098,9 +3227,12 @@ function ImportsPageContent() {
                               getMobileDescription={(item) => `${compactReferenceValue(item.classification.type)} - ${item.currentSpatialPath ?? "sans localisation"}`}
                               getMobileMeta={(item) => (
                                 <div className="space-y-1 text-sm text-muted-foreground">
-                                  <p>Code : {item.internalCode}</p>
-                                  <p>Piece : {item.numPiece ?? "-"}</p>
-                                  <p>Reference externe : {item.externalRef ?? "-"}</p>
+                                  {buildMappedEquipmentFields(item, ifcEquipmentPropertyMappings).map((row) => (
+                                    <p key={`${item.rowIndex}-mobile-${row.label}`}>
+                                      {row.label} : {row.targetValue}
+                                      {row.mapping ? ` depuis ${row.mapping}=${row.sourceValue}` : ""}
+                                    </p>
+                                  ))}
                                   <p>GlobalId IFC : {item.sourceGlobalId ?? "-"}</p>
                                   <p>Classe IFC : {item.sourceClass}</p>
                                   <p>Geometrie : {geometryBadgeLabel(item.geometry)}</p>
@@ -3148,6 +3280,7 @@ function ImportsPageContent() {
                                     <IfcEquipmentValidationCard
                                       key={`anomaly-${item.sourceClass}-${item.internalCode}-${item.rowIndex}`}
                                       item={item}
+                                      mappings={ifcEquipmentPropertyMappings}
                                       onOpen={setSelectedIfcEquipment}
                                     />
                                   ))}
@@ -3875,6 +4008,61 @@ function ImportsPageContent() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog open={selectedIfcSpatialNode !== null} onOpenChange={(open) => (!open ? setSelectedIfcSpatialNode(null) : undefined)}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Proprietes IFC du noeud spatial</DialogTitle>
+            <DialogDescription>
+              Consultation des proprietes disponibles dans la previsualisation IFC4.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedIfcSpatialNode ? (
+            <div className="max-h-[72vh] space-y-5 overflow-auto pr-2">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <ReadOnlyField label="Libelle" value={selectedIfcSpatialNode.label} />
+                <ReadOnlyField label="Code" value={selectedIfcSpatialNode.code} />
+                <ReadOnlyField label="Type" value={selectedIfcSpatialNode.type} />
+                <ReadOnlyField label="Classe IFC" value={selectedIfcSpatialNode.sourceClass ?? "-"} />
+                <ReadOnlyField label="Chemin" value={selectedIfcSpatialNode.path} />
+                <ReadOnlyField label="Parent" value={selectedIfcSpatialNode.parentPath ?? "Racine"} />
+                <ReadOnlyField label="GlobalId IFC" value={selectedIfcSpatialNode.externalRef ?? "-"} />
+                <ReadOnlyField label="Geometrie" value={geometryBadgeLabel(selectedIfcSpatialNode.geometry)} />
+                <ReadOnlyField label="Dimensions XYZ" value={geometrySizeLabel(selectedIfcSpatialNode.geometry)} />
+                <ReadOnlyField label="Source geometrie" value={selectedIfcSpatialNode.geometry?.geometrySource ?? "-"} />
+                <ReadOnlyField label="Bbox min" value={selectedIfcSpatialNode.geometry?.worldBbox ? `${selectedIfcSpatialNode.geometry.worldBbox.min.x}; ${selectedIfcSpatialNode.geometry.worldBbox.min.y}; ${selectedIfcSpatialNode.geometry.worldBbox.min.z}` : "-"} />
+                <ReadOnlyField label="Bbox max" value={selectedIfcSpatialNode.geometry?.worldBbox ? `${selectedIfcSpatialNode.geometry.worldBbox.max.x}; ${selectedIfcSpatialNode.geometry.worldBbox.max.y}; ${selectedIfcSpatialNode.geometry.worldBbox.max.z}` : "-"} />
+              </div>
+              {selectedIfcSpatialNode.geometry?.geometryMessage ? (
+                <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-900">
+                  {selectedIfcSpatialNode.geometry.geometryMessage}
+                </div>
+              ) : null}
+              <IfcPropertyTree
+                title="Proprietes IFC"
+                value={selectedIfcSpatialNode.sourceMetadata?.properties ?? {}}
+                defaultOpen
+              />
+              <IfcPropertyTree
+                title="Metadonnees source"
+                value={Object.fromEntries(
+                  recordEntries(selectedIfcSpatialNode.sourceMetadata ?? {}).filter(([key, value]) =>
+                    key !== "properties" && value !== undefined && value !== null
+                  )
+                )}
+              />
+              <IfcPropertyTree
+                title="Metadonnees geometrie"
+                value={selectedIfcSpatialNode.geometry?.geometryMetadata ?? {}}
+              />
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedIfcSpatialNode(null)}>
+              Fermer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={selectedIfcEquipment !== null} onOpenChange={(open) => (!open ? setSelectedIfcEquipment(null) : undefined)}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
@@ -3914,6 +4102,20 @@ function ImportsPageContent() {
                   {selectedIfcEquipment.anomalyReasons.join(" ")}
                 </div>
               ) : null}
+              <div className="rounded-xl border border-border/60 bg-background/70 p-4">
+                <p className="text-sm font-semibold text-foreground">Valeurs mappees a importer</p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {buildMappedEquipmentFields(selectedIfcEquipment, ifcEquipmentPropertyMappings).map((row) => (
+                    <div key={`mapped-${row.label}`} className="rounded-lg border border-border/60 bg-card/40 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">{row.label}</p>
+                      <p className="mt-1 break-words text-sm font-medium text-foreground">{row.targetValue}</p>
+                      <p className="mt-1 break-words font-mono text-xs text-muted-foreground">
+                        {row.mapping ? `${row.mapping}: ${row.sourceValue}` : "Aucun mapping source"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="rounded-xl border border-border/60 bg-background/70 p-4">
                 <p className="text-sm font-semibold text-foreground">Proprietes IFC conservees</p>
                 {Object.keys(selectedIfcEquipment.properties).length === 0 ? (

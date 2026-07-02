@@ -50,6 +50,7 @@ export interface SpatialNodeTreeItem {
   externalSource: SpatialSourceKind | null;
   externalRef: string | null;
   sourceClass: string | null;
+  sourceMetadata: Record<string, unknown> | null;
   children: SpatialNodeTreeItem[];
 }
 

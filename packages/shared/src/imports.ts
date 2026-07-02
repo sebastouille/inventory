@@ -259,6 +259,7 @@ export interface Ifc4SpatialPreviewNode {
   parentPath: string | null;
   externalRef: string | null;
   sourceClass: string | null;
+  sourceMetadata?: Record<string, unknown> | null;
   childrenCount: number;
   geometry?: Ifc4GeometryPreview | null;
 }
@@ -387,6 +388,7 @@ export interface Ifc4GeometryDiagnosticsResponse {
     missing: number;
     errors: number;
     derivedStoreys: number;
+    derivedZones: number;
     blockedByParent: number;
     blockedBySpatialTarget: number;
     importable: number;

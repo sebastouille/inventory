@@ -224,6 +224,10 @@ export class SpatialService {
         externalSource: node.externalSource ?? null,
         externalRef: node.externalRef ?? null,
         sourceClass: node.sourceClass ?? null,
+        sourceMetadata:
+          node.sourceMetadata && typeof node.sourceMetadata === "object"
+            ? (node.sourceMetadata as Record<string, unknown>)
+            : null,
         children: this.buildTree(nodes, node.id)
       }));
   }

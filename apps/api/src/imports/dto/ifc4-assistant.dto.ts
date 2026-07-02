@@ -7,15 +7,17 @@ import {
   type Ifc4ImportPolicy
 } from "@inventory/shared";
 
+const IFC4_SELECTION_JSON_MAX_LENGTH = 50000;
+
 export class Ifc4AssistantDto {
   @IsOptional()
   @IsString()
-  @MaxLength(1000)
+  @MaxLength(IFC4_SELECTION_JSON_MAX_LENGTH)
   selectedClasses?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(IFC4_SELECTION_JSON_MAX_LENGTH)
   selectedProperties?: string;
 
   @IsOptional()

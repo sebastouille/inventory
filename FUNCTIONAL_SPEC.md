@@ -59,7 +59,10 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - `MATCH` reste un resultat d observation conforme ; les anomalies V1 sont `WRONG_LOCATION`, `UNKNOWN_CODE`, `MISSING`, `DUPLICATE` et `OUT_OF_SCOPE`
 - la V1 execution terrain est mobile-first avec scan camera prioritaire via `BarcodeDetector` ou `@zxing/browser`, douchette Bluetooth HID en acceleration, saisie manuelle en secours, file IndexedDB par campagne et synchronisation idempotente
 - la saisie manuelle terrain accepte maintenant les references metier : un noeud peut etre resolu par UUID, code, chemin ou reference externe, et un equipement par code interne, reference externe ou numero de piece
-- la fin de piece terrain genere maintenant les anomalies `MISSING` du noeud actif sans attendre la cloture complete de la campagne
+- la fin de noeud actif terrain genere maintenant les anomalies `MISSING` du noeud actif et de ses descendants sans attendre la cloture complete de la campagne
+- les campagnes peuvent etre creees et executees sur un noeud `FLOOR`, `ZONE` ou `ROOM`; le matching accepte un equipement attendu dans un descendant du noeud actif
+- un resultat `WRONG_LOCATION` cree automatiquement une anomalie et une correction superviseur `LOCATION_CHANGE` proposee vers le noeud observe, sans deplacer directement l equipement
+- la cloture de campagne met a jour `Equipment.lastInventoryAt` pour les equipements observes et ecrit un audit `inventory.equipment.observed`
 - la V1 corrections superviseur permet `LOCATION_CHANGE`, `STATUS_CHANGE`, `RELABEL_REQUEST` et `MANUAL_IMMOBILIZATION_LINK` ; le changement de localisation cree aussi un `EquipmentMovement`
 - la V1 rapprochement comptable est manuelle : l ecran propose des candidats informatifs mais ne rattache jamais automatiquement une immobilisation a un equipement
 - toute ecriture spatiale backend recalcule maintenant le `path`, le `depth` et la coherence parent/enfant avant persistence, y compris pour l import et le backfill legacy
@@ -79,10 +82,13 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
 - l assistant IFC4 permet de corriger les types proposes en preview pour les noeuds spatiaux et les referentiels assets avant generation des jobs ou application des referentiels ; la preview spatial affiche aussi une arborescence deployable pour valider la chaine parent/enfant avant creation du job
 - l assistant IFC4 affiche maintenant une vue de controle complete avant import : noeuds spatiaux, equipements rattaches sous leur noeud spatial, classification asset associee a chaque equipement, et liste separee des equipements non rattachables a l arborescence
 - l assistant IFC4 permet maintenant de mapper explicitement les proprietes `IfcPropertySingleValue` vers les champs equipement `code equipement`, `num piece`, `reference externe`, `categorie`, `famille`, `sous-famille`, `type`, `marque`, `modele`, `statut` et `proprietaire`, avec recalcul volontaire de la preview equipements sans relancer IfcOpenShell
+- l assistant IFC4 rattache maintenant un equipement a la `ROOM` du meme batiment dont la propriete `N de piece` correspond a la propriete `N de piece` de l equipement ; les doublons de numero de piece dans un meme batiment sont signales comme anomalie
 - l assistant IFC4 dispose maintenant de profils dedies sauvegardables par organisation, separes des profils CSV/XLSX, pour reutiliser classes, proprietes, mappings, overrides, niveau de geometrie et politique d import
 - l assistant IFC4 affiche maintenant un panneau `Diagnostics geometrie IFC` avec compteurs, filtres `Tous`, `OK`, `A corriger`, detail GlobalId/classe/path/bbox/dimensions/message et export CSV des anomalies
 - l assistant IFC4 propose maintenant une politique explicite `Importer uniquement les lignes OK`; dans ce mode les objets non importables sont exclus du job, inscrits dans le rapport et jamais positionnes par approximation
 - les `IFCBUILDINGSTOREY` sans geometrie propre peuvent maintenant etre acceptes comme etages derives : l assistant utilise d abord l emprise X/Z du batiment parent geometrique, sinon l emprise des enfants geometriques ; ils restent signales comme `Etage derive` et ne masquent pas les autres erreurs IFC
+- les `IFC_PROPERTY_ZONE` crees depuis la propriete IFC `Zone` peuvent maintenant etre acceptes comme zones derivees : l assistant calcule leur emprise depuis les `IFCSPACE` enfants geometriques et les signale comme geometrie derivee
+- en mode strict, les zones issues de `IFCSPACE` sont rattachees a un etage uniquement via la relation IFC vers `IFCBUILDINGSTOREY`; si cette relation manque, l assistant affiche une erreur au lieu de rattacher au batiment
 - les rapports d import spatial et equipements distinguent maintenant les lignes `NO_OP`, c est a dire les objets deja presents et strictement identiques, afin d eviter des mises a jour inutiles
 - l assistant IFC4 peut appliquer volontairement des referentiels assets manquants detectes dans le fichier, en s appuyant sur une structure technique IFC4 pour les types inconnus, et affiche les equipements candidats en detail read-only
 - le shell web supporte maintenant une aide contextuelle V1 en pop-up, avec vignettes cliquables, texte a plat et visuels d explication ; la page `imports` en est le premier ecran equipe
@@ -124,12 +130,16 @@ Ce fichier decrit le perimetre fonctionnel courant de l'application. Le mettre a
   - module `imports` avec annulation d un traitement IFC4 `RUNNING` depuis le badge de statut du worker
   - module `imports` avec diagnostic de geometrie IFC obligatoire, badges `Geometrie OK`, `Geometrie manquante` et `Erreur geometrie`, import strict par defaut, import partiel explicite des lignes OK, export CSV des anomalies et profils IFC4 dedies
   - module `imports` avec badge `Etage derive` pour les `IFCBUILDINGSTOREY` dont l emprise est calculee depuis le batiment parent ou les enfants geometriques
+  - module `imports` avec zones derivees pour les `IFC_PROPERTY_ZONE` sans bbox propre mais avec des `IFCSPACE` enfants geometriques
+  - module `imports` qui conserve le modele IFC mappe meme si la marque est vide, en le rattachant a une marque technique `NON_DEFINI`
   - module `imports` avec aide contextuelle detaillee accessible depuis le header via un bouton `?`
   - module `labels` avec assistant de previsualisation et telechargement des etiquettes equipements et noeuds spatiaux
+  - module `assets` dont la liste affiche la reference produit importee comme code interne, le numero de piece, le type et le path spatial
   - module `campaigns` avec liste, creation, preview des attendus, ouverture, execution terrain, cloture et archivage
   - les pages `campaigns`, `locations`, `immobilizations` et `imports` savent maintenant s ouvrir directement depuis des query params de deep-link (`campaignId`, `perimeterId`, `immobilizationId`, `jobId`, `profileId`)
   - le formulaire de creation d une campagne propose une selection de perimetre spatial en arborescence, avec icones par type de noeud, compteur d equipements rattaches au noeud et `Inclure les enfants` actif par defaut
-  - module `campaigns/:id/run` avec scan camera prioritaire, mode douchette Bluetooth HID, saisie manuelle, scan de noeud obligatoire, file IndexedDB, synchronisation idempotente et action `Terminer cette piece`
+  - module `campaigns/:id/run` avec scan camera prioritaire, mode douchette Bluetooth HID, saisie manuelle, scan de noeud obligatoire, file IndexedDB, synchronisation idempotente et action dynamique `Terminer ce bureau`, `Terminer cette zone` ou `Terminer cet etage`
+  - module `campaigns/:id/run` qui accepte aussi le numero de piece metier comme reference de noeud actif quand il correspond aux attendus de la campagne
   - module `anomalies` avec liste des ecarts, detail, proposition de correction et application superviseur
   - module `reconciliation` avec selection d equipement, candidats informatifs, rattachement manuel et detachement d immobilisation
   - module `imports` qui efface une ancienne alerte reseau des qu une requete API reussit, pour eviter un faux negatif persistant dans l ecran

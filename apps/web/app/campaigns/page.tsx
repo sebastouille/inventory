@@ -39,6 +39,23 @@ import { apiFetch, isUnauthorizedApiError } from "@/lib/api";
 import { buildPathWithQuery } from "@/lib/url-query";
 import { useStoredToken } from "@/lib/session";
 
+function expectedItemSubtitle(item: InventoryCampaignDetail["expectedItems"][number]) {
+  return [
+    item.numPiece ? `Piece ${item.numPiece}` : null,
+    item.typeLabel,
+    item.expectedSpatialPath ?? "sans localisation"
+  ]
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function expectedItemModelLine(item: InventoryCampaignDetail["expectedItems"][number]) {
+  if (item.brandLabel || item.modelLabel) {
+    return [item.brandLabel, item.modelLabel].filter(Boolean).join(" / ");
+  }
+  return item.familyLabel ?? "-";
+}
+
 function CampaignsPageContent() {
   const router = useRouter();
   const pathname = usePathname();
@@ -332,6 +349,30 @@ function CampaignsPageContent() {
                         <p className="font-semibold">{selectedCampaign.anomaliesCount}</p>
                       </div>
                     </div>
+                    <div className="rounded-2xl border border-border/70 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Perimetre campagne</p>
+                          <div className="mt-2 space-y-2">
+                            {selectedCampaign.scopes.map((scope) => (
+                              <div key={scope.id} className="rounded-xl border border-border/60 p-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <StatusBadge status="neutral" label={scope.spatialType} />
+                                  <p className="font-medium">{scope.spatialLabel}</p>
+                                  <span className="text-xs text-muted-foreground">
+                                    {scope.includeChildren ? "Enfants inclus" : "Noeud seul"}
+                                  </span>
+                                </div>
+                                <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{scope.spatialPath}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <span className="rounded-full border border-border/60 px-3 py-1 text-sm font-medium">
+                          {formatNumber(selectedCampaign.expectedItemsCount)} attendu(s)
+                        </span>
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       <Button variant="outline" onClick={() => void previewExpected()}>
                         <EyeIcon className="size-4" />
@@ -356,8 +397,9 @@ function CampaignsPageContent() {
                         <div key={item.id} className="rounded-xl border border-border/70 p-3">
                           <p className="font-medium">{item.internalCode}</p>
                           <p className="text-sm text-muted-foreground">
-                            {item.familyLabel ?? "-"} - {item.typeLabel ?? "-"} - {item.expectedSpatialPath ?? "sans localisation"}
+                            {expectedItemSubtitle(item)}
                           </p>
+                          <p className="text-xs text-muted-foreground">{expectedItemModelLine(item)}</p>
                         </div>
                       ))}
                     </div>

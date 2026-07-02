@@ -1,3 +1,5 @@
+import type { SpatialNodeType } from "./spatial";
+
 export const INVENTORY_CAMPAIGN_STATUSES = ["DRAFT", "READY", "OPEN", "REVIEW", "CLOSED", "ARCHIVED"] as const;
 export type InventoryCampaignStatus = (typeof INVENTORY_CAMPAIGN_STATUSES)[number];
 
@@ -93,13 +95,18 @@ export interface InventoryExpectedItemSummary {
   id: string;
   equipmentId: string;
   internalCode: string;
+  numPiece: string | null;
   label: string;
   familyLabel: string | null;
   typeLabel: string | null;
+  brandLabel: string | null;
+  modelLabel: string | null;
   statusLabel: string | null;
   ownerLabel: string | null;
   immobilizationCode: string | null;
   expectedSpatialNodeId: string | null;
+  expectedSpatialLabel: string | null;
+  expectedSpatialType: SpatialNodeType | null;
   expectedSpatialPath: string | null;
   isSeen: boolean;
   seenAt: string | null;
@@ -116,8 +123,11 @@ export interface InventoryObservationSummary {
   result: InventoryObservationResult;
   equipmentId: string | null;
   equipmentInternalCode: string | null;
+  expectedSpatialNodeId: string | null;
+  expectedSpatialPath: string | null;
   observedSpatialNodeId: string | null;
   observedSpatialPath: string | null;
+  correctionProposed: boolean;
   comment: string | null;
   clientObservedAt: string | null;
   observedAt: string;
@@ -130,6 +140,7 @@ export interface InventoryCampaignDetail extends InventoryCampaignSummary {
     spatialNodeId: string;
     spatialPath: string;
     spatialLabel: string;
+    spatialType: SpatialNodeType;
     includeChildren: boolean;
   }>;
   familyFilters: InventoryCampaignFamilyFilterInput[];

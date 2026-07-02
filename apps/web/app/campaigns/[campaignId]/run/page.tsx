@@ -5,7 +5,8 @@ import type {
   InventoryCampaignDetail,
   InventoryCampaignSyncInput,
   InventoryCampaignSyncResponse,
-  ScanSource
+  ScanSource,
+  SpatialNodeType
 } from "@inventory/shared";
 import { parseScanPayload } from "@inventory/shared";
 import { Button, Field, Input, PageSection, StatusBadge } from "@inventory/ui";
@@ -62,6 +63,32 @@ type Feedback = {
   title: string;
   detail: string;
 };
+
+type ActiveNodeInfo = {
+  reference: string;
+  id: string | null;
+  label: string | null;
+  type: SpatialNodeType | null;
+  path: string | null;
+  numPiece: string | null;
+};
+
+function expectedItemSubtitle(item: InventoryCampaignDetail["expectedItems"][number]) {
+  return [
+    item.numPiece ? `Piece ${item.numPiece}` : null,
+    item.typeLabel,
+    item.expectedSpatialPath ?? "-"
+  ]
+    .filter(Boolean)
+    .join(" - ");
+}
+
+function expectedItemModelLine(item: InventoryCampaignDetail["expectedItems"][number]) {
+  if (item.brandLabel || item.modelLabel) {
+    return [item.brandLabel, item.modelLabel].filter(Boolean).join(" / ");
+  }
+  return item.familyLabel ?? "-";
+}
 
 const DB_NAME = "inventory-terrain-v1";
 const DB_VERSION = 1;
@@ -148,16 +175,102 @@ function vibrate(kind: FeedbackKind) {
 
 function expectedItemMatchesActiveNode(
   item: InventoryCampaignDetail["expectedItems"][number],
-  activeNodeReference: string | null
+  activeNode: ActiveNodeInfo | null
 ) {
-  const reference = activeNodeReference?.trim();
+  const reference = activeNode?.reference.trim();
   if (!reference) return false;
+  if (activeNode?.id && item.expectedSpatialNodeId === activeNode.id) return true;
   if (item.expectedSpatialNodeId === reference) return true;
+  if (item.numPiece?.trim() === reference) return true;
   const expectedPath = item.expectedSpatialPath?.trim();
   if (!expectedPath) return false;
+  if (activeNode?.path && (expectedPath === activeNode.path || expectedPath.startsWith(`${activeNode.path}/`))) return true;
   if (expectedPath === reference || expectedPath.startsWith(`${reference}/`)) return true;
   const expectedSegments = expectedPath.split("/").filter(Boolean);
   return expectedSegments[expectedSegments.length - 1] === reference;
+}
+
+function pathContainsReference(path: string | null, reference: string) {
+  if (!path) return false;
+  return path === reference || path.startsWith(`${reference}/`) || path.split("/").filter(Boolean).includes(reference);
+}
+
+function resolveActiveNodeInfo(campaign: InventoryCampaignDetail | null, activeNodeReference: string | null): ActiveNodeInfo | null {
+  const reference = activeNodeReference?.trim();
+  if (!campaign || !reference) return null;
+  const normalized = reference.startsWith("NODE:") ? reference.slice(5).trim() : reference;
+  for (const scope of campaign.scopes) {
+    const lastSegment = scope.spatialPath.split("/").filter(Boolean).at(-1);
+    if (
+      scope.spatialNodeId === normalized
+      || scope.spatialPath === normalized
+      || scope.spatialLabel === normalized
+      || lastSegment === normalized
+    ) {
+      return {
+        reference: normalized,
+        id: scope.spatialNodeId,
+        label: scope.spatialLabel,
+        type: scope.spatialType,
+        path: scope.spatialPath,
+        numPiece: null
+      };
+    }
+  }
+  const exactExpected = campaign.expectedItems.find((item) => {
+    const lastSegment = item.expectedSpatialPath?.split("/").filter(Boolean).at(-1);
+    return (
+      item.expectedSpatialNodeId === normalized
+      || item.expectedSpatialPath === normalized
+      || item.numPiece?.trim() === normalized
+      || lastSegment === normalized
+    );
+  });
+  if (exactExpected) {
+    return {
+      reference: normalized,
+      id: exactExpected.expectedSpatialNodeId,
+      label: exactExpected.expectedSpatialLabel,
+      type: exactExpected.expectedSpatialType,
+      path: exactExpected.expectedSpatialPath,
+      numPiece: exactExpected.numPiece
+    };
+  }
+  const descendantMatch = campaign.expectedItems.find((item) => pathContainsReference(item.expectedSpatialPath, normalized));
+  if (descendantMatch) {
+    return {
+      reference: normalized,
+      id: null,
+      label: normalized,
+      type: null,
+      path: normalized.includes("/") ? normalized : null,
+      numPiece: null
+    };
+  }
+  return {
+    reference: normalized,
+    id: null,
+    label: normalized,
+    type: null,
+    path: null,
+    numPiece: null
+  };
+}
+
+function activeNodeNoun(type: SpatialNodeType | null | undefined) {
+  if (type === "ROOM") return "bureau";
+  if (type === "ZONE") return "zone";
+  if (type === "FLOOR") return "etage";
+  return "noeud";
+}
+
+function completeNodeButtonLabel(type: SpatialNodeType | null | undefined, isCompleting: boolean) {
+  const noun = activeNodeNoun(type);
+  if (isCompleting) return `Fin du ${noun}...`;
+  if (type === "ZONE") return "Terminer cette zone";
+  if (type === "FLOOR") return "Terminer cet etage";
+  if (type === "ROOM") return "Terminer ce bureau";
+  return "Terminer ce noeud";
 }
 
 export default function CampaignRunPage() {
@@ -467,9 +580,6 @@ export default function CampaignRunPage() {
       title: "Observation captee",
       detail: scannedPayload
     });
-    if (navigator.onLine) {
-      void syncQueue(nextQueue);
-    }
   }
 
   handleScanRef.current = (payload: string, source: ScanSource) => {
@@ -526,13 +636,13 @@ export default function CampaignRunPage() {
 
   async function completeNode() {
     if (!activeNodeIdRef.current) {
-      setError("Noeud actif obligatoire pour terminer une piece");
+      setError("Noeud actif obligatoire pour terminer le noeud");
       return;
     }
     if (queueRef.current.length > 0) {
       const synced = await syncQueue(queueRef.current);
       if (!synced || queueRef.current.length > 0) {
-        setError("Synchronise la file offline avant de terminer la piece");
+        setError("Synchronise la file offline avant de terminer le noeud actif");
         return;
       }
     }
@@ -547,13 +657,13 @@ export default function CampaignRunPage() {
       setLastComplete(response);
       applyFeedback({
         kind: "success",
-        title: "Piece terminee",
+        title: "Noeud termine",
         detail: `${response.missingCreated} manquant(s) cree(s), ${response.missingAlreadyExisting} deja existant(s)`
       });
       setError(null);
       void loadCampaign();
     } catch (completeError) {
-      setError(completeError instanceof Error ? completeError.message : "Impossible de terminer la piece");
+      setError(completeError instanceof Error ? completeError.message : "Impossible de terminer le noeud actif");
     } finally {
       setIsCompletingNode(false);
     }
@@ -572,9 +682,11 @@ export default function CampaignRunPage() {
     });
   }
 
-  const activeExpected = campaign?.expectedItems.filter((item) => expectedItemMatchesActiveNode(item, activeNodeId)) ?? [];
+  const activeNodeInfo = resolveActiveNodeInfo(campaign, activeNodeId);
+  const activeExpected = campaign?.expectedItems.filter((item) => expectedItemMatchesActiveNode(item, activeNodeInfo)) ?? [];
   const seenInActiveNode = activeExpected.filter((item) => item.isSeen).length;
   const latestObservations = lastSync?.observations ?? campaign?.observations.slice(0, 8) ?? [];
+  const activeNodeNounLabel = activeNodeNoun(activeNodeInfo?.type);
 
   return (
     <AppShell>
@@ -603,14 +715,19 @@ export default function CampaignRunPage() {
           </div>
           <div className="rounded-3xl border border-border/70 bg-card/70 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Noeud actif</p>
-            <p className="mt-2 break-all font-mono text-sm">{activeNodeId ?? "-"}</p>
+            <div className="mt-2 space-y-1">
+              <p className="break-all font-mono text-sm font-semibold">{activeNodeInfo?.label ?? activeNodeId ?? "-"}</p>
+              {activeNodeInfo?.type ? <StatusBadge status="neutral" label={activeNodeInfo.type} /> : null}
+              {activeNodeInfo?.path ? <p className="break-all text-xs text-muted-foreground">{activeNodeInfo.path}</p> : null}
+              {activeNodeInfo?.numPiece ? <p className="text-xs text-muted-foreground">Piece {activeNodeInfo.numPiece}</p> : null}
+            </div>
           </div>
           <div className="rounded-3xl border border-border/70 bg-card/70 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">File offline</p>
             <p className="mt-2 text-lg font-semibold">{queue.length}</p>
           </div>
           <div className="rounded-3xl border border-border/70 bg-card/70 p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Attendus piece</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-muted-foreground">Attendus {activeNodeNounLabel}</p>
             <p className="mt-2 text-lg font-semibold">
               {seenInActiveNode}/{activeExpected.length}
             </p>
@@ -710,48 +827,53 @@ export default function CampaignRunPage() {
             </div>
           </PageSection>
 
-          <PageSection title="Pilotage piece" description="Synchronisation et fin de piece.">
+          <PageSection title="Equipements scannes" description="Liste des scans avant synchronisation.">
             <div className="space-y-3">
-              <Button variant="outline" onClick={() => void syncQueue()} disabled={queue.length === 0 || isSyncing}>
-                <RefreshCwIcon className="size-4" />
-                {isSyncing ? "Synchronisation..." : `Synchroniser (${queue.length})`}
-              </Button>
-              <Button onClick={() => void completeNode()} disabled={!activeNodeId || isCompletingNode}>
-                <CheckCircle2Icon className="size-4" />
-                {isCompletingNode ? "Fin de piece..." : "Terminer cette piece"}
-              </Button>
-              {lastComplete ? (
-                <div className="rounded-2xl border border-border/70 p-3 text-sm text-muted-foreground">
-                  Derniere fin de piece : {lastComplete.missingCreated} manquant(s) cree(s),{" "}
-                  {lastComplete.missingAlreadyExisting} deja existant(s).
-                </div>
-              ) : null}
-              <div className="rounded-2xl border border-border/70 p-3 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">Aide douchette</p>
-                <p>1. Associer la douchette au smartphone en Bluetooth.</p>
-                <p>2. Configurer la douchette en mode clavier HID.</p>
-                <p>3. Ouvrir cet ecran, choisir Douchette, puis scanner.</p>
+              <div className="space-y-2">
+                {queue.map((item, index) => (
+                  <div key={item.clientObservationId} className="rounded-2xl border border-border/70 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="break-all font-mono text-sm text-foreground">{item.scannedPayload}</p>
+                      <StatusBadge status="neutral" label={`Scan ${index + 1}`} />
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {item.scanSource} - noeud actif {item.activeSpatialNodeId}
+                    </p>
+                  </div>
+                ))}
+                {queue.length === 0 ? <p className="text-sm text-muted-foreground">Aucun scan en attente de synchronisation.</p> : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" onClick={() => void syncQueue()} disabled={queue.length === 0 || isSyncing}>
+                  <RefreshCwIcon className="size-4" />
+                  {isSyncing ? "Synchronisation..." : `Synchroniser (${queue.length})`}
+                </Button>
+                <Button onClick={() => void completeNode()} disabled={!activeNodeId || isCompletingNode}>
+                  <CheckCircle2Icon className="size-4" />
+                  {completeNodeButtonLabel(activeNodeInfo?.type, isCompletingNode)}
+                </Button>
               </div>
             </div>
           </PageSection>
         </div>
 
         <div className="grid gap-5 xl:grid-cols-2">
-          <PageSection title="Attendus du noeud actif" description="Equipements attendus dans la piece ou zone scannee.">
+          <PageSection title="Attendus du noeud actif" description={`Equipements attendus dans le ${activeNodeNounLabel} actif et ses descendants.`}>
             <div className="space-y-2">
               {activeExpected.slice(0, 12).map((item) => (
                 <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 p-3">
                   <div>
                     <p className="font-medium">{item.internalCode}</p>
                     <p className="text-sm text-muted-foreground">
-                      {item.label} - {item.expectedSpatialPath ?? "-"}
+                      {expectedItemSubtitle(item)}
                     </p>
+                    <p className="text-xs text-muted-foreground">{expectedItemModelLine(item)}</p>
                   </div>
                   <StatusBadge status={item.isSeen ? "success" : "neutral"} label={item.isSeen ? "Vu" : "Attendu"} />
                 </div>
               ))}
               {activeNodeId && activeExpected.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Aucun equipement attendu exactement sur ce noeud.</p>
+                <p className="text-sm text-muted-foreground">Aucun equipement attendu sur ce noeud ou ses descendants.</p>
               ) : null}
               {!activeNodeId ? <p className="text-sm text-muted-foreground">Scanner un noeud pour afficher ses attendus.</p> : null}
             </div>
@@ -759,6 +881,17 @@ export default function CampaignRunPage() {
 
           <PageSection title="Derniers resultats" description="Retour du moteur apres synchronisation.">
             <div className="space-y-2">
+              {lastComplete ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 p-3">
+                  <div>
+                    <p className="font-medium">Fin du noeud actif</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lastComplete.missingCreated} manquant(s) cree(s), {lastComplete.missingAlreadyExisting} deja existant(s)
+                    </p>
+                  </div>
+                  <StatusBadge status={lastComplete.missingCreated > 0 ? "warning" : "success"} label={lastComplete.missingCreated > 0 ? "MISSING" : "OK"} />
+                </div>
+              ) : null}
               {latestObservations.map((observation) => (
                 <div key={observation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border/70 p-3">
                   <div>
@@ -766,11 +899,19 @@ export default function CampaignRunPage() {
                     <p className="text-sm text-muted-foreground">
                       {observation.equipmentInternalCode ?? observation.scannedCode ?? "-"} - {observation.scanSource ?? "source inconnue"}
                     </p>
+                    {observation.expectedSpatialPath || observation.observedSpatialPath ? (
+                      <p className="text-xs text-muted-foreground">
+                        Attendu : {observation.expectedSpatialPath ?? "-"} | Observe : {observation.observedSpatialPath ?? "-"}
+                      </p>
+                    ) : null}
+                    {observation.result === "WRONG_LOCATION" && observation.correctionProposed ? (
+                      <p className="text-xs font-medium text-warning">Correction de localisation proposee</p>
+                    ) : null}
                   </div>
-                  <StatusBadge status={observation.result === "MATCH" ? "success" : "warning"} label={observation.result} />
+                  <StatusBadge status={feedbackStatus(resultFeedback(observation.result))} label={observation.result} />
                 </div>
               ))}
-              {latestObservations.length === 0 ? <p className="text-sm text-muted-foreground">Aucun resultat synchronise.</p> : null}
+              {latestObservations.length === 0 && !lastComplete ? <p className="text-sm text-muted-foreground">Aucun resultat synchronise.</p> : null}
             </div>
           </PageSection>
         </div>

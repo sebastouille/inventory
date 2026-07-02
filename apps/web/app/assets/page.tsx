@@ -263,16 +263,19 @@ export default function AssetsPage() {
               columns={[
                 {
                   key: "internalCode",
-                  label: "Code interne",
+                  label: "Reference produit / code interne",
                   sortable: true,
                   render: (item) => (
                     <div className="space-y-1">
                       <p className="font-medium text-foreground">{item.internalCode}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.numPiece ? `Piece ${item.numPiece}` : item.serialNumber ?? "Numero de serie non renseigne"}
-                      </p>
+                      {item.externalRef ? <p className="font-mono text-xs text-muted-foreground">Ref externe {item.externalRef}</p> : null}
                     </div>
                   )
+                },
+                {
+                  key: "numPiece",
+                  label: "N de piece",
+                  render: (item) => item.numPiece ?? "-"
                 },
                 {
                   key: "type",
@@ -280,14 +283,18 @@ export default function AssetsPage() {
                   render: (item) => (
                     <div className="space-y-1">
                       <p className="text-sm text-foreground">{item.equipmentType.label}</p>
-                      <p className="text-xs text-muted-foreground">{item.equipmentType.familyLabel}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {item.equipmentModel
+                          ? `${item.equipmentModel.brandLabel} / ${item.equipmentModel.label}`
+                          : item.equipmentType.familyLabel}
+                      </p>
                     </div>
                   )
                 },
                 {
                   key: "location",
-                  label: "Localisation",
-                  render: (item) => item.currentSpatialLabel ?? "-"
+                  label: "Path",
+                  render: (item) => item.currentSpatialPath ?? item.currentSpatialLabel ?? "-"
                 },
                 {
                   key: "immobilizationCode",
@@ -326,11 +333,21 @@ export default function AssetsPage() {
               onSortChange={(sort, direction) => setQuery((current) => ({ ...current, sort: sort as typeof current.sort, direction, page: 1 }))}
               getRowId={(item) => item.id}
               getMobileTitle={(item) => item.internalCode}
-              getMobileDescription={(item) => item.equipmentType.label}
+              getMobileDescription={(item) =>
+                [
+                  item.numPiece ? `Piece ${item.numPiece}` : null,
+                  item.equipmentType.label,
+                  item.currentSpatialPath ?? item.currentSpatialLabel
+                ]
+                  .filter(Boolean)
+                  .join(" - ")
+              }
               getMobileMeta={(item) => (
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">
-                    {item.currentSpatialLabel ?? item.serialNumber ?? "Sans localisation"}
+                    {item.equipmentModel
+                      ? `${item.equipmentModel.brandLabel} / ${item.equipmentModel.label}`
+                      : item.serialNumber ?? "Marque et modele non renseignes"}
                   </p>
                   <StatusBadge status={item.isDeleted ? "inactive" : "active"} label={item.isDeleted ? "Archive" : item.equipmentStatus.label} />
                 </div>

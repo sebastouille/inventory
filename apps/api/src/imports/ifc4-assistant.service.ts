@@ -132,8 +132,16 @@ const DEFAULT_MAX_SHAPE_PARTS = 12;
 const DEFAULT_SELECTED_CLASSES = ["IFCFURNITURE"];
 const STOREY_DERIVED_GEOMETRY_SOURCE = "ifc-storey-derived";
 const STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE = "ifc-storey-derived-from-building";
+const ZONE_DERIVED_FROM_SPACES_GEOMETRY_SOURCE = "ifc-zone-derived-from-spaces";
 const STOREY_DERIVED_THICKNESS_METERS = 0.08;
 const STOREY_DERIVED_MARGIN_METERS = 0.5;
+const IFC_ROOM_NUMBER_PROPERTY_KEYS = new Set([
+  "ndepiece",
+  "nodepiece",
+  "numerodepiece",
+  "numeropiece",
+  "roomnumber"
+]);
 const EQUIPMENT_CLASSES = new Set([
   "IFCFURNITURE",
   "IFCFURNISHINGELEMENT",
@@ -217,6 +225,35 @@ function normalizeFreeText(value: unknown) {
   }
   const normalized = String(value).trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeIfcPropertyKey(value: string) {
+  return value
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .toLowerCase();
+}
+
+function readIfcRoomNumber(properties: Record<string, string>) {
+  for (const [key, value] of Object.entries(properties)) {
+    if (IFC_ROOM_NUMBER_PROPERTY_KEYS.has(normalizeIfcPropertyKey(key))) {
+      return normalizeFreeText(value);
+    }
+  }
+  return null;
+}
+
+function findBuildingPathForSpatialPath(path: string, nodesByPath: Map<string, Ifc4SpatialPreviewNode>) {
+  let current = nodesByPath.get(path) ?? null;
+  while (current) {
+    if (current.type === "BUILDING") {
+      return current.path;
+    }
+    current = current.parentPath ? nodesByPath.get(current.parentPath) ?? null : null;
+  }
+  return null;
 }
 
 function pathDepth(path: string) {
@@ -565,9 +602,21 @@ function isStoreyNode(node: Pick<Ifc4SpatialPreviewNode, "sourceClass" | "type">
   return node.sourceClass?.toUpperCase() === "IFCBUILDINGSTOREY" || node.type === "FLOOR";
 }
 
+function isPropertyZoneNode(node: Pick<Ifc4SpatialPreviewNode, "sourceClass" | "type">) {
+  return node.sourceClass?.toUpperCase() === "IFC_PROPERTY_ZONE";
+}
+
 function isDerivedStoreyGeometry(geometry: Ifc4GeometryPreview | null | undefined) {
   return geometry?.geometrySource === STOREY_DERIVED_GEOMETRY_SOURCE
     || geometry?.geometrySource === STOREY_DERIVED_FROM_BUILDING_GEOMETRY_SOURCE;
+}
+
+function isDerivedZoneGeometry(geometry: Ifc4GeometryPreview | null | undefined) {
+  return geometry?.geometrySource === ZONE_DERIVED_FROM_SPACES_GEOMETRY_SOURCE;
+}
+
+function isDerivedSpatialGeometry(geometry: Ifc4GeometryPreview | null | undefined) {
+  return isDerivedStoreyGeometry(geometry) || isDerivedZoneGeometry(geometry);
 }
 
 function withDerivedStoreyFailure(geometry: Ifc4GeometryPreview | null | undefined): Ifc4GeometryPreview {
@@ -581,6 +630,22 @@ function withDerivedStoreyFailure(geometry: Ifc4GeometryPreview | null | undefin
     geometryMetadata: {
       ...(geometry?.geometryMetadata ?? {}),
       reasonCode: "STOREY_DERIVATION_FAILED",
+      requiresOwnGeometry: false
+    }
+  };
+}
+
+function withDerivedZoneFailure(geometry: Ifc4GeometryPreview | null | undefined): Ifc4GeometryPreview {
+  return {
+    geometryStatus: geometry?.geometryStatus === "ERROR" ? "ERROR" : "MISSING",
+    geometryMessage: geometry?.geometryMessage ?? "Emprise de zone impossible a calculer depuis les espaces enfants",
+    worldCenter: geometry?.worldCenter ?? null,
+    worldSize: geometry?.worldSize ?? null,
+    worldBbox: geometry?.worldBbox ?? null,
+    geometrySource: geometry?.geometrySource ?? null,
+    geometryMetadata: {
+      ...(geometry?.geometryMetadata ?? {}),
+      reasonCode: "ZONE_DERIVATION_FAILED",
       requiresOwnGeometry: false
     }
   };
@@ -652,6 +717,57 @@ function deriveStoreyGeometry(input: {
       marginMeters: parentBbox ? 0 : STOREY_DERIVED_MARGIN_METERS,
       sourceGlobalId: input.sourceGlobalId,
       parentGeometrySource: input.parentGeometry?.geometrySource ?? null,
+      derivedFromChildrenCount: childBboxes.length,
+      requiresOwnGeometry: false,
+      extractionEngine: "ifcopenshell-python"
+    }
+  };
+}
+
+function deriveZoneGeometry(input: {
+  zone: Ifc4SpatialPreviewNode;
+  sourceMetadata: Record<string, unknown>;
+  childGeometries: Ifc4GeometryPreview[];
+}): Ifc4GeometryPreview | null {
+  const childBboxes = input.childGeometries
+    .filter((geometry) => geometry.geometryStatus === "READY" && geometry.worldBbox)
+    .map((geometry) => geometry.worldBbox!);
+  if (childBboxes.length === 0) {
+    return null;
+  }
+
+  const bbox = {
+    min: {
+      x: Math.min(...childBboxes.map((childBbox) => childBbox.min.x)),
+      y: Math.min(...childBboxes.map((childBbox) => childBbox.min.y)),
+      z: Math.min(...childBboxes.map((childBbox) => childBbox.min.z))
+    },
+    max: {
+      x: Math.max(...childBboxes.map((childBbox) => childBbox.max.x)),
+      y: Math.max(...childBboxes.map((childBbox) => childBbox.max.y)),
+      z: Math.max(...childBboxes.map((childBbox) => childBbox.max.z))
+    }
+  };
+
+  return {
+    geometryStatus: "READY",
+    geometryMessage: "Geometrie de zone derivee depuis les espaces enfants",
+    worldCenter: {
+      x: (bbox.min.x + bbox.max.x) / 2,
+      y: (bbox.min.y + bbox.max.y) / 2,
+      z: (bbox.min.z + bbox.max.z) / 2
+    },
+    worldSize: {
+      x: bbox.max.x - bbox.min.x,
+      y: bbox.max.y - bbox.min.y,
+      z: bbox.max.z - bbox.min.z
+    },
+    worldBbox: bbox,
+    geometrySource: ZONE_DERIVED_FROM_SPACES_GEOMETRY_SOURCE,
+    geometryMetadata: {
+      bbox,
+      derivation: "ZONE_EXTENT_FROM_CHILD_SPACES",
+      sourceProperty: input.sourceMetadata.sourceProperty ?? "Zone",
       derivedFromChildrenCount: childBboxes.length,
       requiresOwnGeometry: false,
       extractionEngine: "ifcopenshell-python"
@@ -1176,7 +1292,7 @@ export class Ifc4AssistantService implements OnModuleInit {
       },
       selectedSheetName: "IFC4 spatial"
     });
-    if (options.importPolicy === "IMPORT_READY_ONLY") {
+    if (options.importPolicy === "IMPORT_READY_ONLY" && excludedDiagnostics.length > 0) {
       await this.appendJobLog(auth.organizationId, preparedJob.id, "WARNING", "geometry_exclusions", "Lignes spatial exclues du job IFC4", {
         excluded: excludedDiagnostics.length,
         imported: spatialRows.length
@@ -1198,10 +1314,11 @@ export class Ifc4AssistantService implements OnModuleInit {
     const artifact = await this.readAnalysisArtifact(auth.organizationId, jobId);
     const options = this.normalizeOptions(optionsInput);
     const selectedClasses = new Set(options.selectedClasses ?? DEFAULT_SELECTED_CLASSES);
-    const diagnostics = await this.buildGeometryDiagnostics(auth.organizationId, artifact.analysis);
+    const remapped = await this.remapAnalysisEquipments(auth.organizationId, jobId, artifact, options);
+    const diagnostics = await this.buildGeometryDiagnostics(auth.organizationId, remapped.artifact.analysis);
     if (artifact.analysis.profile?.geometryLevel !== "NONE" && options.importPolicy === "STRICT_ALL_READY") {
       this.assertGeometryReady(
-        artifact.analysis.equipmentRows
+        remapped.artifact.analysis.equipmentRows
           .filter((row) => selectedClasses.has(row.sourceClass.toUpperCase()))
           .map((row) => ({
             label: row.internalCode,
@@ -1210,7 +1327,7 @@ export class Ifc4AssistantService implements OnModuleInit {
       );
     }
     const importableInternalCodes = new Set(
-      analysisEquipmentRowsBySelection(artifact.analysis.equipmentRows, selectedClasses)
+      analysisEquipmentRowsBySelection(remapped.artifact.analysis.equipmentRows, selectedClasses)
         .filter((row) => diagnostics.items.some((item) =>
           item.domain === "equipment"
           && item.importable
@@ -1223,9 +1340,9 @@ export class Ifc4AssistantService implements OnModuleInit {
       && selectedClasses.has(String(item.sourceClass ?? "").toUpperCase())
       && !item.importable
     );
-    const rawRows = artifact.equipmentRawRows.filter((row) => {
+    const rawRows = remapped.artifact.equipmentRawRows.filter((row) => {
       const internalCode = String(row.values.internalCode ?? "");
-      const preview = artifact.analysis.equipmentRows.find((item) => item.internalCode === internalCode);
+      const preview = remapped.artifact.analysis.equipmentRows.find((item) => item.internalCode === internalCode);
       if (preview && !selectedClasses.has(preview.sourceClass.toUpperCase())) return false;
       if (options.importPolicy !== "IMPORT_READY_ONLY") {
         return true;
@@ -1252,7 +1369,7 @@ export class Ifc4AssistantService implements OnModuleInit {
       },
       selectedSheetName: "IFC4 equipments"
     });
-    if (options.importPolicy === "IMPORT_READY_ONLY") {
+    if (options.importPolicy === "IMPORT_READY_ONLY" && excludedDiagnostics.length > 0) {
       await this.appendJobLog(auth.organizationId, preparedJob.id, "WARNING", "geometry_exclusions", "Lignes equipements exclues du job IFC4", {
         excluded: excludedDiagnostics.length,
         imported: rawRows.length
@@ -1720,7 +1837,7 @@ export class Ifc4AssistantService implements OnModuleInit {
 
     for (const node of [...analysis.spatialNodes].sort((left, right) => pathDepth(left.path) - pathDepth(right.path))) {
       const messages: string[] = [];
-      let status: Ifc4GeometryDiagnosticItem["status"] = isDerivedStoreyGeometry(node.geometry)
+      let status: Ifc4GeometryDiagnosticItem["status"] = isDerivedSpatialGeometry(node.geometry)
         ? "DERIVED"
         : node.geometry?.geometryStatus ?? "MISSING";
       let reasonCode: string | null = null;
@@ -1728,9 +1845,15 @@ export class Ifc4AssistantService implements OnModuleInit {
       if (isDerivedStoreyGeometry(node.geometry)) {
         reasonCode = "STOREY_GEOMETRY_DERIVED";
         messages.push(node.geometry?.geometryMessage ?? "Geometrie d etage derivee depuis les enfants");
+      } else if (isDerivedZoneGeometry(node.geometry)) {
+        reasonCode = "ZONE_GEOMETRY_DERIVED";
+        messages.push(node.geometry?.geometryMessage ?? "Geometrie de zone derivee depuis les espaces enfants");
       } else if (isStoreyNode(node) && node.geometry?.geometryMetadata?.reasonCode === "STOREY_DERIVATION_FAILED") {
         reasonCode = "STOREY_DERIVATION_FAILED";
         messages.push(node.geometry?.geometryMessage ?? "Emprise d etage impossible a calculer depuis les enfants");
+      } else if (isPropertyZoneNode(node) && node.geometry?.geometryMetadata?.reasonCode === "ZONE_DERIVATION_FAILED") {
+        reasonCode = "ZONE_DERIVATION_FAILED";
+        messages.push(node.geometry?.geometryMessage ?? "Emprise de zone impossible a calculer depuis les espaces enfants");
       } else if (node.geometry?.geometryStatus !== "READY") {
         reasonCode = node.geometry?.geometryStatus === "ERROR" ? "GEOMETRY_ERROR" : "GEOMETRY_MISSING";
         messages.push(node.geometry?.geometryMessage ?? "Geometrie IFC obligatoire absente");
@@ -1800,7 +1923,8 @@ export class Ifc4AssistantService implements OnModuleInit {
         ready: items.filter((item) => item.geometryStatus === "READY").length,
         missing: items.filter((item) => item.geometryStatus === "MISSING").length,
         errors: items.filter((item) => item.geometryStatus === "ERROR").length,
-        derivedStoreys: items.filter((item) => item.status === "DERIVED").length,
+        derivedStoreys: items.filter((item) => item.status === "DERIVED" && item.reasonCode === "STOREY_GEOMETRY_DERIVED").length,
+        derivedZones: items.filter((item) => item.status === "DERIVED" && item.reasonCode === "ZONE_GEOMETRY_DERIVED").length,
         blockedByParent: items.filter((item) => item.status === "PARENT_INVALID").length,
         blockedBySpatialTarget: items.filter((item) => item.status === "SPATIAL_TARGET_INVALID").length,
         importable: items.filter((item) => item.importable).length,
@@ -2889,7 +3013,7 @@ export class Ifc4AssistantService implements OnModuleInit {
     const productProperties = this.buildProperties(parsed.entities);
     const containment = this.buildContainment(parsed.entities);
     const products = this.buildProducts(parsed.entities, productProperties, options.selectedProperties);
-    const spatial = this.buildSpatial(parsed.entities, productProperties, containment, products, geometryByGlobalId);
+    const spatial = this.buildSpatial(parsed.entities, productProperties, containment, products, geometryByGlobalId, options);
     const propertyCandidates = this.buildPropertyCandidates(products, options);
     const equipment = this.buildEquipments(products, spatial.productSpatialPath, options, geometryByGlobalId);
     const assetReferenceCandidates = await this.buildAssetReferences(
@@ -3277,12 +3401,124 @@ export class Ifc4AssistantService implements OnModuleInit {
     return propertyName ? normalizeFreeText(properties[propertyName]) : null;
   }
 
+  private async remapAnalysisEquipments(
+    organizationId: string,
+    jobId: string,
+    artifact: Ifc4AnalysisArtifact,
+    options: AssistantOptions
+  ) {
+    const equipmentRows: Ifc4EquipmentPreviewRow[] = [];
+    const equipmentRawRows: ImportRowPreview[] = [];
+
+    for (const row of artifact.analysis.equipmentRows) {
+      const internalCode = this.readMappedProperty(row.properties, options.propertyMappings.internalCode)
+        ?? normalizeFreeText(row.properties["ID unique"])
+        ?? normalizeFreeText(row.properties["ID IFC Archicad"])
+        ?? row.sourceGlobalId
+        ?? row.internalCode;
+      const numPiece = this.readMappedProperty(row.properties, options.propertyMappings.numPiece)
+        ?? readIfcRoomNumber(row.properties)
+        ?? row.numPiece;
+      const externalRef = this.readMappedProperty(row.properties, options.propertyMappings.externalRef)
+        ?? row.sourceGlobalId
+        ?? row.externalRef
+        ?? null;
+      const typeLabel = this.readMappedProperty(row.properties, options.propertyMappings.type)
+        ?? normalizeFreeText(row.properties["Type de mobilier"])
+        ?? row.equipmentTypeCode
+        ?? row.sourceClass;
+      const equipmentTypeCode = normalizeCode(typeLabel, row.sourceClass);
+      const manufacturer = this.readMappedProperty(row.properties, options.propertyMappings.brand)
+        ?? normalizeFreeText(row.properties.Fabricant)
+        ?? normalizeFreeText(row.properties.Manufacturer)
+        ?? null;
+      const modelLabel = this.readMappedProperty(row.properties, options.propertyMappings.model)
+        ?? normalizeFreeText(row.properties["Modele/Gamme"])
+        ?? normalizeFreeText(row.properties["Modele"])
+        ?? normalizeFreeText(row.properties.Model)
+        ?? null;
+      const equipmentModelCode = modelLabel
+        ? `${normalizeCode(manufacturer, "NON_DEFINI")}__${normalizeCode(modelLabel, "MODELE")}`
+        : null;
+      const equipmentStatusCode = normalizeCode(
+        this.readMappedProperty(row.properties, options.propertyMappings.status) ?? options.defaultStatusCode,
+        DEFAULT_STATUS_CODE
+      );
+      const ownerEntityCode = normalizeCode(
+        this.readMappedProperty(row.properties, options.propertyMappings.owner) ?? options.defaultOwnerEntityCode,
+        DEFAULT_OWNER_CODE
+      );
+      const previewRow: Ifc4EquipmentPreviewRow = {
+        ...row,
+        internalCode,
+        numPiece,
+        externalRef,
+        equipmentTypeCode,
+        equipmentModelCode,
+        equipmentStatusCode,
+        ownerEntityCode
+      };
+      equipmentRows.push(previewRow);
+      equipmentRawRows.push(buildRow(previewRow.rowIndex, {
+        internalCode,
+        numPiece,
+        externalRef,
+        serialNumber: normalizeFreeText(row.properties.SerialNumber),
+        equipmentTypeCode,
+        equipmentModelCode,
+        equipmentStatusCode,
+        ownerEntityCode,
+        currentSpatialPath: row.currentSpatialPath,
+        currentSpatialExternalRef: row.currentSpatialExternalRef,
+        technicalCharacteristics: JSON.stringify({
+          source: "IFC4",
+          sourceClass: row.sourceClass,
+          globalId: row.sourceGlobalId,
+          properties: row.properties
+        }),
+        geometrySource: row.geometry?.geometrySource ?? null,
+        geometryMetadata: row.geometry?.geometryMetadata ? JSON.stringify(row.geometry.geometryMetadata) : null,
+        worldCenterX: row.geometry?.worldCenter ? String(row.geometry.worldCenter.x) : null,
+        worldCenterY: row.geometry?.worldCenter ? String(row.geometry.worldCenter.y) : null,
+        worldCenterZ: row.geometry?.worldCenter ? String(row.geometry.worldCenter.z) : null,
+        worldSizeX: row.geometry?.worldSize ? String(row.geometry.worldSize.x) : null,
+        worldSizeY: row.geometry?.worldSize ? String(row.geometry.worldSize.y) : null,
+        worldSizeZ: row.geometry?.worldSize ? String(row.geometry.worldSize.z) : null,
+        notes: row.label,
+        sourceClass: row.sourceClass
+      }));
+    }
+
+    const assetReferences = await this.buildAssetReferences(organizationId, equipmentRows, options);
+    const nextArtifact: Ifc4AnalysisArtifact = {
+      ...artifact,
+      analysis: {
+        ...artifact.analysis,
+        assetReferences,
+        equipmentRows,
+        profile: {
+          ...(artifact.analysis.profile ?? this.buildProfile(options)),
+          selectedClasses: options.selectedClasses ?? artifact.analysis.profile?.selectedClasses ?? DEFAULT_SELECTED_CLASSES,
+          selectedProperties: options.selectedProperties,
+          maxProducts: options.maxProducts,
+          geometryLevel: options.geometryLevel,
+          maxShapeParts: options.maxShapeParts,
+          importPolicy: options.importPolicy
+        }
+      },
+      equipmentRawRows
+    };
+    await persistImportArtifact(organizationId, jobId, "ifc4-analysis-result.json", nextArtifact);
+    return { artifact: nextArtifact };
+  }
+
   private buildSpatial(
     entities: Map<string, IfcEntity>,
     productProperties: Map<string, Record<string, string>>,
     containment: ReturnType<Ifc4AssistantService["buildContainment"]>,
     products: Map<string, IfcProduct>,
-    geometryByGlobalId: Map<string, Ifc4GeometryPreview>
+    geometryByGlobalId: Map<string, Ifc4GeometryPreview>,
+    options: AssistantOptions
   ) {
     const warnings: string[] = [];
     const rowMap = new Map<string, ImportRowPreview>();
@@ -3298,6 +3534,50 @@ export class Ifc4AssistantService implements OnModuleInit {
     const findParentPath = (entityId: string) => {
       const parentId = containment.aggregateParent.get(entityId) ?? containment.spatialParent.get(entityId) ?? null;
       return parentId ? pathByEntity.get(parentId) ?? null : null;
+    };
+
+    const findIfcStoreyPath = (entityId: string) => {
+      const visited = new Set<string>();
+      let currentId: string | null = containment.aggregateParent.get(entityId) ?? containment.spatialParent.get(entityId) ?? null;
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        const parentProduct = products.get(currentId);
+        if (parentProduct?.sourceClass === "IFCBUILDINGSTOREY") {
+          return pathByEntity.get(currentId) ?? null;
+        }
+        currentId = containment.aggregateParent.get(currentId) ?? containment.spatialParent.get(currentId) ?? null;
+      }
+      return null;
+    };
+
+    const markNodeGeometryError = (path: string | null, message: string, reasonCode: string) => {
+      if (!path) {
+        return;
+      }
+      const node = nodeMap.get(path);
+      if (!node) {
+        return;
+      }
+      const nextGeometry: Ifc4GeometryPreview = {
+        geometryStatus: "ERROR",
+        geometryMessage: message,
+        worldCenter: node.geometry?.worldCenter ?? null,
+        worldSize: node.geometry?.worldSize ?? null,
+        worldBbox: node.geometry?.worldBbox ?? null,
+        geometrySource: node.geometry?.geometrySource ?? null,
+        geometryMetadata: {
+          ...(node.geometry?.geometryMetadata ?? {}),
+          reasonCode
+        }
+      };
+      node.geometry = nextGeometry;
+      const row = rowMap.get(path);
+      if (row) {
+        row.values = {
+          ...row.values,
+          ...geometryRowValues(nextGeometry)
+        };
+      }
     };
 
     const createNode = (input: {
@@ -3349,6 +3629,7 @@ export class Ifc4AssistantService implements OnModuleInit {
         parentPath: input.parentPath,
         externalRef: input.externalRef,
         sourceClass: input.sourceClass,
+        sourceMetadata: input.sourceMetadata,
         childrenCount: 0,
         geometry: input.geometry
       });
@@ -3415,10 +3696,25 @@ export class Ifc4AssistantService implements OnModuleInit {
         continue;
       }
       const floorValue = normalizeFreeText(product.properties.Etage) ?? normalizeFreeText(product.properties.Storey);
+      const ifcStoreyPath = product.sourceClass === "IFCSPACE" ? findIfcStoreyPath(product.id) : null;
       const floorPath = floorValue ? floorByNumericLevel.get(floorValue.replace(/\D+/g, "")) ?? null : null;
-      const parentPath = floorPath ?? buildingPath ?? [...nodeMap.values()].find((node) => node.type === "SITE")?.path ?? null;
+      const resolvedSpatialParent = productSpatialPath.get(product.id)?.path ?? null;
+      const strictSpaceRequiresIfcStorey = options.importPolicy === "STRICT_ALL_READY" && product.sourceClass === "IFCSPACE";
+      const parentPath = strictSpaceRequiresIfcStorey
+        ? ifcStoreyPath
+        : ifcStoreyPath ?? floorPath ?? resolvedSpatialParent ?? buildingPath ?? [...nodeMap.values()].find((node) => node.type === "SITE")?.path ?? null;
       if (!parentPath) {
-        warnings.push("ZONE_PARENT_UNRESOLVED");
+        const message = strictSpaceRequiresIfcStorey
+          ? `ZONE_IFC_STOREY_RELATION_MISSING:${product.globalId ?? product.id}`
+          : "ZONE_PARENT_UNRESOLVED";
+        warnings.push(message);
+        if (strictSpaceRequiresIfcStorey) {
+          markNodeGeometryError(
+            pathByEntity.get(product.id) ?? null,
+            "Relation IFCBUILDINGSTOREY obligatoire absente pour rattacher la zone",
+            "IFC_STOREY_RELATION_MISSING"
+          );
+        }
         continue;
       }
       const code = normalizeCode(zoneLabel, "ZONE");
@@ -3434,7 +3730,8 @@ export class Ifc4AssistantService implements OnModuleInit {
         sourceClass: "IFC_PROPERTY_ZONE",
         sourceMetadata: {
           sourceProperty: "Zone",
-          floor: floorValue
+          floor: floorValue,
+          parentSource: ifcStoreyPath ? "ifc-building-storey-relation" : floorPath ? "property-floor" : resolvedSpatialParent ? "ifc-spatial-containment" : "building-fallback"
         },
         geometry: EQUIPMENT_CLASSES.has(product.sourceClass) ? productGeometry : null
       });
@@ -3486,6 +3783,126 @@ export class Ifc4AssistantService implements OnModuleInit {
       const parentPath = pathByEntity.get(parentId) ?? null;
       if (parentPath) {
         productSpatialPath.set(entityId, { path: parentPath, externalRef: products.get(parentId)?.globalId ?? null });
+      }
+    }
+
+    const roomNumberEntries = new Map<string, Ifc4SpatialPreviewNode[]>();
+    for (const node of nodeMap.values()) {
+      if (node.type !== "ROOM") {
+        continue;
+      }
+      const properties = node.sourceMetadata?.properties;
+      if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+        continue;
+      }
+      const roomNumber = readIfcRoomNumber(properties as Record<string, string>);
+      if (!roomNumber) {
+        continue;
+      }
+      const buildingPath = findBuildingPathForSpatialPath(node.path, nodeMap);
+      const key = `${buildingPath ?? "__NO_BUILDING__"}::${roomNumber}`;
+      roomNumberEntries.set(key, [...(roomNumberEntries.get(key) ?? []), node]);
+    }
+
+    const uniqueRoomByBuildingAndNumber = new Map<string, Ifc4SpatialPreviewNode>();
+    for (const [key, rooms] of roomNumberEntries.entries()) {
+      if (rooms.length === 1) {
+        uniqueRoomByBuildingAndNumber.set(key, rooms[0]);
+        continue;
+      }
+      const roomNumber = key.split("::").slice(1).join("::");
+      const message = `Numero de piece IFC duplique dans le batiment: ${roomNumber}`;
+      warnings.push(`ROOM_NUMBER_DUPLICATE:${roomNumber}`);
+      for (const room of rooms) {
+        markNodeGeometryError(room.path, message, "ROOM_NUMBER_DUPLICATE");
+      }
+    }
+
+    for (const product of products.values()) {
+      if (!EQUIPMENT_CLASSES.has(product.sourceClass)) {
+        continue;
+      }
+      const roomNumber = readIfcRoomNumber(product.properties);
+      if (!roomNumber) {
+        continue;
+      }
+      const currentSpatialPath = productSpatialPath.get(product.id)?.path ?? null;
+      const buildingPath = currentSpatialPath ? findBuildingPathForSpatialPath(currentSpatialPath, nodeMap) : null;
+      const room = uniqueRoomByBuildingAndNumber.get(`${buildingPath ?? "__NO_BUILDING__"}::${roomNumber}`);
+      if (!room) {
+        warnings.push(`EQUIPMENT_ROOM_NUMBER_UNRESOLVED:${roomNumber}:${product.globalId ?? product.id}`);
+        continue;
+      }
+      productSpatialPath.set(product.id, { path: room.path, externalRef: room.externalRef ?? null });
+    }
+
+    for (const node of nodeMap.values()) {
+      if (!isPropertyZoneNode(node) || node.geometry?.geometryStatus === "READY") {
+        continue;
+      }
+
+      const childGeometries: Ifc4GeometryPreview[] = [];
+      for (const candidate of nodeMap.values()) {
+        if (
+          candidate.path !== node.path
+          && candidate.path.startsWith(`${node.path}/`)
+          && (candidate.sourceClass?.toUpperCase() === "IFCSPACE" || candidate.type === "ROOM")
+          && candidate.geometry?.geometryStatus === "READY"
+        ) {
+          childGeometries.push(candidate.geometry);
+        }
+      }
+      for (const product of products.values()) {
+        if (product.sourceClass !== "IFCSPACE") {
+          continue;
+        }
+        const zoneLabel = normalizeFreeText(product.properties.Zone);
+        if (!zoneLabel || normalizeCode(zoneLabel, "ZONE") !== node.code) {
+          continue;
+        }
+        const spatialPath = pathByEntity.get(product.id) ?? null;
+        if (
+          spatialPath
+          && spatialPath !== node.path
+          && !spatialPath.startsWith(`${node.path}/`)
+          && (!node.parentPath || (spatialPath !== node.parentPath && !spatialPath.startsWith(`${node.parentPath}/`)))
+        ) {
+          continue;
+        }
+        const geometry = product.globalId ? geometryByGlobalId.get(product.globalId) ?? null : null;
+        if (geometry?.geometryStatus === "READY") {
+          childGeometries.push(geometry);
+        }
+      }
+
+      const sourceMetadata = sourceMetadataByPath.get(node.path) ?? {};
+      const derivedGeometry = deriveZoneGeometry({
+        zone: node,
+        sourceMetadata,
+        childGeometries
+      });
+      const nextGeometry = derivedGeometry ?? withDerivedZoneFailure(node.geometry);
+      node.geometry = nextGeometry;
+      const row = rowMap.get(node.path);
+      if (row) {
+        const nextSourceMetadata = derivedGeometry
+          ? {
+              ...sourceMetadata,
+              zoneGeometryPolicy: "DERIVED_FROM_CHILD_SPACES",
+              geometryMessage: derivedGeometry.geometryMessage
+            }
+          : {
+              ...sourceMetadata,
+              zoneGeometryPolicy: "DERIVED_FROM_CHILD_SPACES",
+              geometryError: "ZONE_DERIVATION_FAILED"
+            };
+        sourceMetadataByPath.set(node.path, nextSourceMetadata);
+        node.sourceMetadata = nextSourceMetadata;
+        row.values = {
+          ...row.values,
+          sourceMetadata: JSON.stringify(nextSourceMetadata),
+          ...geometryRowValues(nextGeometry)
+        };
       }
     }
 
@@ -3541,6 +3958,7 @@ export class Ifc4AssistantService implements OnModuleInit {
               geometryError: "STOREY_DERIVATION_FAILED"
             };
         sourceMetadataByPath.set(node.path, nextSourceMetadata);
+        node.sourceMetadata = nextSourceMetadata;
         row.values = {
           ...row.values,
           sourceMetadata: JSON.stringify(nextSourceMetadata),
@@ -3588,7 +4006,8 @@ export class Ifc4AssistantService implements OnModuleInit {
         ?? normalizeFreeText(product.properties["ID IFC Archicad"])
         ?? product.globalId
         ?? `IFC-${product.id}`;
-      const numPiece = this.readMappedProperty(product.properties, options.propertyMappings.numPiece);
+      const numPiece = this.readMappedProperty(product.properties, options.propertyMappings.numPiece)
+        ?? readIfcRoomNumber(product.properties);
       const externalRef = this.readMappedProperty(product.properties, options.propertyMappings.externalRef)
         ?? product.globalId
         ?? null;
@@ -3606,7 +4025,7 @@ export class Ifc4AssistantService implements OnModuleInit {
         ?? normalizeFreeText(product.properties["Modele"])
         ?? normalizeFreeText(product.properties.Model)
         ?? null;
-      const equipmentModelCode = manufacturer && modelLabel
+      const equipmentModelCode = modelLabel
         ? `${normalizeCode(manufacturer, "NON_DEFINI")}__${normalizeCode(modelLabel, "MODELE")}`
         : null;
       const equipmentStatusCode = normalizeCode(

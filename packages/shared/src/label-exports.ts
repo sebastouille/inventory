@@ -49,6 +49,7 @@ export interface SpatialNodeLabelPreviewItem {
   nodeCode: string;
   nodeLabel: string;
   spatialPath: string;
+  roomNumber: string | null;
   barcodePayload: string;
 }
 
